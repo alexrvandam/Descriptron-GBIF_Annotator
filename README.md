@@ -1,8 +1,7 @@
-# Descriptron-GBIF_Annotator
 
-# Descriptron × GBIF — Web Morphology Annotator
+# Descriptron × GBIF Annotator — Web Morphology Annotator
 
-A **single-page web application (SPA)** implemented as a **single-file HTML/JavaScript app** for morphological annotation of specimen images (e.g., from GBIF), with an optional backend for image proxying/uploads and (optionally) SAM-assisted segmentation support.
+A **single-page web application (SPA)** implemented as a **single-file HTML/JavaScript app** for morphological annotation of specimen images (e.g., from GBIF), with an optional backend for image proxying/uploads and (optionally) SAM2-assisted segmentation support.
 
 ## Live deployment
 
