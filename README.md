@@ -8,7 +8,8 @@ A **single-page web application (SPA)** implemented as a **single-file HTML/Java
 This GitHub repository contains the source files (frontend + optional backend/Docker setup) to reproduce the project.
 
 A fully working hosted version is available on a Hetzner server at:
-- https://www.descriptrongbifannotator.org
+[https://descriptrongbifannotator.org/
+](url)
 
 ## What’s in this repository
 
