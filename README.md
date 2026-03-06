@@ -49,3 +49,17 @@ You can run the frontend without Docker, but some browser features (fetch/CORS) 
 ### Option 1: Serve locally with Python
 ```bash
 python3 -m http.server 8000
+
+```
+if you use the website or github or find it useful please cite it,
+
+Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.0) [Computer software]. https://github.com/alexrvandam/Descriptron-GBIF_Annotator
+
+@software{VanDam_DescriptronGBIFAnnotator_2026,
+  author  = {Van Dam, A.},
+  title   = {Descriptron-GBIF Annotator},
+  version = {1.0.0},
+  type    = {Computer software},
+  url     = {https://github.com/alexrvandam/Descriptron-GBIF_Annotator}
+}
+
