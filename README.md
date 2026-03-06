@@ -61,5 +61,7 @@ Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.0) [Computer software]. http
   version = {1.0.0},
   type    = {Computer software},
   url     = {https://github.com/alexrvandam/Descriptron-GBIF_Annotator}
+  doi     = {10.5281/zenodo.18888578},
+  url     = {https://doi.org/10.5281/zenodo.18888578},
 }
 
