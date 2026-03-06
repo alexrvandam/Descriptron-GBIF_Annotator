@@ -56,12 +56,12 @@ if you use the website or github or find it useful please cite it,
 Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.0) [Computer software]. https://github.com/alexrvandam/Descriptron-GBIF_Annotator
 
 @software{VanDam_DescriptronGBIFAnnotator_2026,
-  author  = {Van Dam, A.},
+  author  = {Van Dam, Alex},
   title   = {Descriptron-GBIF Annotator},
-  version = {1.0.0},
-  type    = {Computer software},
-  url     = {https://github.com/alexrvandam/Descriptron-GBIF_Annotator}
+  version = {1.0.1},
   doi     = {10.5281/zenodo.18888578},
-  url     = {https://doi.org/10.5281/zenodo.18888578},
+  url     = {https://github.com/alexrvandam/Descriptron-GBIF_Annotator},
+  note    = {Archived on Zenodo: \url{https://doi.org/10.5281/zenodo.18888578}}
 }
+
 
