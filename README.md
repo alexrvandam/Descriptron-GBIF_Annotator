@@ -3,6 +3,8 @@
 
 A **single-page web application (SPA)** implemented as a **single-file HTML/JavaScript app** for morphological annotation of specimen images (e.g., from GBIF), with an optional backend for image proxying/uploads and (optionally) SAM2-assisted segmentation support.
 
+![Descriptron-GBIF_Annotator screen shot](./Screenshot from 2026-03-02 15-12-07.png')
+
 ## Live deployment
 
 This GitHub repository contains the source files (frontend + optional backend/Docker setup) to reproduce the project.
