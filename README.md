@@ -13,7 +13,7 @@ A fully working hosted version is available on a Hetzner server at:
 
 ## What’s in this repository
 
-### Frontend (single-file web app)
+### Frontend (single-file web app) 
 - `descriptron-gbif-annotator.html` (you may rename to `index.html`)
 
 The frontend runs in the browser and provides:
