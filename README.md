@@ -9,7 +9,7 @@ This GitHub repository contains the source files (frontend + optional backend/Do
 
 A fully working hosted version is available on a Hetzner server at:
 [https://descriptrongbifannotator.org/
-](url)
+](https://descriptrongbifannotator.org/)
 
 ## What’s in this repository
 
