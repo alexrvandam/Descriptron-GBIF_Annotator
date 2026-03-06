@@ -53,7 +53,7 @@ python3 -m http.server 8000
 ```
 if you use the website or github or find it useful please cite it,
 
-Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.0) [Computer software]. https://github.com/alexrvandam/Descriptron-GBIF_Annotator
+Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.0) [Computer software]. https://github.com/alexrvandam/Descriptron-GBIF_Annotator. doi: https://doi.org/10.5281/zenodo.18888578
 
 @software{VanDam_DescriptronGBIFAnnotator_2026,
   author  = {Van Dam, Alex},
