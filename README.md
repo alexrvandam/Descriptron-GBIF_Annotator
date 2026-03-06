@@ -10,7 +10,8 @@ This GitHub repository contains the source files (frontend + optional backend/Do
 A fully working hosted version is available on a Hetzner server at:
 [https://descriptrongbifannotator.org/
 ](https://descriptrongbifannotator.org/) 
-if for some reason you have fortinet or another firewall you can also try the server directly via [http://46.225.84.116:8100/](http://46.225.84.116:8100/)
+
+if for some reason you have fortinet or another firewall you can also try the server directly via :[http://46.225.84.116:8100/](http://46.225.84.116:8100/)
 
 
 ## What’s in this repository
