@@ -1,0 +1,54 @@
+# /root/descriptron-gbif-api/docker-compose.yml
+#
+# ONNX Split Architecture:
+#   Server: image encoding only (heavy, one-time per image)
+#   Browser: ONNX decoder (lightweight, ~10ms per prompt)
+#
+# Isolated from main Descriptron Portal.
+
+version: "3.8"
+
+services:
+  gbif-sam2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gbif-sam2-api
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    environment:
+      - SAM2_CHECKPOINT=/app/checkpoints/sam2.1_hiera_tiny.pt
+      - SAM2_CONFIG=configs/sam2.1/sam2.1_hiera_t.yaml
+      - ONNX_DECODER_PATH=/app/onnx/sam2.1_hiera_tiny_decoder.onnx
+      - MAX_CACHE_SIZE=200
+      - MAX_IMAGE_SIZE=1024
+      - LOG_LEVEL=INFO
+    volumes:
+      - sam2_data:/app/checkpoints
+      - onnx_data:/app/onnx
+      - ./sam2.1_hiera_tiny_decoder.onnx:/app/onnx/sam2.1_hiera_tiny_decoder.onnx:ro
+      - ./static:/app/static:ro
+#      - ./static/uploads:/app/static/uploads:ro
+      - ./data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    networks:
+      - gbif-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sam2_data:
+  onnx_data:
+
+networks:
+  gbif-net:
+    driver: bridge

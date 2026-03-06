@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Descriptron × GBIF — Web Morphology Annotator</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.all.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Roboto',sans-serif;background:#f7f9f7;color:#333;height:100vh;width:100vw;overflow:hidden;display:flex;flex-direction:column}
+
+  /* GBIF Colors */
+  :root{
+    --gbif-green:#509E2F;--gbif-green-dark:#3d7a23;--gbif-green-light:#e8f5e1;
+    --gbif-green-pale:#f0f8ec;--bg:#ffffff;--bg-alt:#f5f6f5;--border:#e0e0e0;
+    --text:#333333;--text-muted:#666666;--text-light:#999999;
+    --danger:#d32f2f;--warning:#f9a825;--accent:#1976d2;
+  }
+
+  .header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:var(--gbif-green);color:white;flex-shrink:0}
+  .header-left{display:flex;align-items:center;gap:10px}
+  .header-title{font-size:15px;font-weight:700;letter-spacing:-0.02em}
+  .header-title span{font-weight:400;opacity:0.8}
+  .header-sub{font-size:10px;opacity:0.8}
+  .header-right{text-align:right}
+  .header-species{font-size:12px;font-weight:500;font-style:italic}
+  .header-meta{font-size:10px;opacity:0.8}
+
+  .main{display:flex;flex:1;overflow:hidden}
+
+  .left-panel{width:200px;background:var(--bg);border-right:1px solid var(--border);padding:10px;overflow-y:auto;flex-shrink:0}
+  .panel-label{color:var(--gbif-green-dark);font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:5px;font-weight:700}
+
+  .tool-btn{display:flex;align-items:center;gap:8px;padding:7px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text-muted);cursor:pointer;font-size:12px;text-align:left;width:100%;font-family:inherit;transition:all 0.15s;margin-bottom:2px}
+  .tool-btn:hover{background:var(--gbif-green-pale)}
+  .tool-btn.active{background:var(--gbif-green-light);border-color:var(--gbif-green);color:var(--gbif-green-dark);font-weight:500}
+  .tool-btn .icon{font-size:15px;width:20px;text-align:center}
+  .tool-btn .shortcut{margin-left:auto;font-size:10px;color:var(--text-light);font-family:'Roboto Mono',monospace}
+
+  .brush-slider{width:100%;accent-color:var(--gbif-green);margin-top:4px}
+
+  .template-select,.view-select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 6px;font-size:11px;font-family:inherit;margin-bottom:4px}
+  .template-select:focus,.view-select:focus{border-color:var(--gbif-green);outline:none}
+
+  .divider{border-top:1px solid var(--border);margin:10px 0;padding-top:10px}
+
+  .sam-status-box{background:var(--bg-alt);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;color:var(--text-muted);margin-top:6px}
+  .sam-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .sam-dot.off{background:var(--danger)}
+  .sam-dot.encoding{background:var(--warning);animation:pulse 1s infinite}
+  .sam-dot.ready{background:var(--gbif-green)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+  .segment-btn{width:100%;padding:8px;background:var(--gbif-green);color:white;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-top:6px;transition:background 0.15s}
+  .segment-btn:hover:not(:disabled){background:var(--gbif-green-dark)}
+  .segment-btn:disabled{opacity:0.4;cursor:not-allowed}
+
+  .tip-text{color:var(--text-light);font-size:10px;margin-top:8px;line-height:1.5;padding:0 2px}
+  .tip-text strong{color:var(--text-muted)}
+
+  .center{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+  .search-bar{padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0}
+  .search-row{display:flex;gap:6px;margin-bottom:6px}
+  .search-select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;font-family:inherit}
+  .search-input{flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;outline:none;font-family:inherit}
+  .search-input:focus{border-color:var(--gbif-green)}
+  .search-btn{background:var(--gbif-green);color:white;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;font-weight:600;font-family:inherit}
+  .search-btn:disabled{opacity:0.5;cursor:not-allowed}
+  .search-btn:hover:not(:disabled){background:var(--gbif-green-dark)}
+
+  .results-list{max-height:160px;overflow-y:auto;background:var(--bg);border-radius:8px;border:1px solid var(--border);margin-bottom:6px}
+  .result-item{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background 0.15s}
+  .result-item:hover{background:var(--gbif-green-pale)}
+  .result-item:last-child{border-bottom:none}
+  .result-thumb{width:44px;height:44px;object-fit:cover;border-radius:4px;background:var(--bg-alt)}
+  .result-name{color:var(--gbif-green-dark);font-size:12px;font-weight:600;font-style:italic}
+  .result-meta{color:var(--text-light);font-size:10px}
+
+  .url-row{display:flex;gap:6px}
+  .url-input{flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11px;outline:none;font-family:inherit}
+  .url-btn{background:var(--bg-alt);color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer;font-family:inherit}
+
+  .canvas-area{flex:1;padding:6px;position:relative;background:var(--bg-alt)}
+  .canvas-container{position:relative;width:100%;height:100%;background:#e8e8e8;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+  .canvas-container canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+  .canvas-placeholder{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-light);font-size:14px;text-align:center}
+  .canvas-placeholder .ph-icon{font-size:48px;margin-bottom:12px}
+
+  .status-bar{display:flex;align-items:center;justify-content:space-between;padding:4px 12px;background:var(--bg);border-top:1px solid var(--border);font-size:10px;color:var(--text-light);flex-shrink:0;gap:12px;font-family:'Roboto Mono',monospace}
+  .status-bar .hl{color:var(--gbif-green-dark);font-weight:500}
+
+  .right-panel{width:270px;background:var(--bg);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+  .panel-tabs{display:flex;border-bottom:1px solid var(--border)}
+  .panel-tab{flex:1;padding:8px 0;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-light);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}
+  .panel-tab.active{background:var(--gbif-green-pale);border-bottom-color:var(--gbif-green);color:var(--gbif-green-dark)}
+  .panel-content{flex:1;overflow-y:auto;padding:10px}
+
+  .region-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid transparent;border-radius:6px;cursor:pointer;transition:all 0.15s;margin-bottom:1px}
+  .region-item:hover{background:var(--gbif-green-pale)}
+  .region-item.active{background:var(--gbif-green-light);border-color:var(--gbif-green)}
+  .region-color{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+  .region-label{color:var(--text-muted);font-size:11px;font-weight:500;flex:1;min-width:0}
+  .region-item.active .region-label{color:var(--gbif-green-dark)}
+  .region-ontology{color:var(--text-light);font-size:9px;font-family:'Roboto Mono',monospace}
+  .region-badge{background:var(--gbif-green-light);color:var(--gbif-green-dark);font-size:9px;padding:1px 5px;border-radius:10px;font-weight:600}
+
+  .attr-editor{margin-left:16px;margin-top:2px;margin-bottom:6px;padding:6px 8px;background:var(--bg-alt);border-radius:6px;border:1px solid var(--border)}
+  .attr-label{color:var(--text-light);font-size:9px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px}
+  .attr-select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:11px;font-family:inherit;margin-bottom:4px}
+  .attr-notes{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 5px;font-size:10px;resize:vertical;min-height:32px;margin-top:2px;font-family:inherit}
+  .clear-btn{margin-top:4px;background:var(--danger);color:white;border:none;border-radius:4px;padding:3px 6px;font-size:10px;cursor:pointer;width:100%;font-family:inherit}
+
+  .export-btn{width:100%;padding:8px 12px;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:6px}
+  .export-btn.primary{background:var(--gbif-green);color:white}
+  .export-btn.primary:hover{background:var(--gbif-green-dark)}
+  .export-btn.secondary{background:var(--bg-alt);color:var(--text-muted);border:1px solid var(--border)}
+  .export-btn.secondary:hover{background:var(--border)}
+
+  .auto-badge{display:inline-block;background:var(--gbif-green);color:white;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:600;margin-left:4px}
+
+  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#333;color:white;padding:8px 20px;border-radius:8px;font-size:12px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none}
+  .toast.show{opacity:1}
+
+  ::-webkit-scrollbar{width:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <span style="font-size:20px">🔬</span>
+    <div>
+      <div class="header-title">DESCRIPTRON <span>× GBIF</span></div>
+      <div class="header-sub">Web Morphology Annotator · MfN Berlin</div>
+    </div>
+  </div>
+  <div class="header-right" id="specimen-info" style="display:none">
+    <div class="header-species" id="specimen-name"></div>
+    <div class="header-meta" id="specimen-meta"></div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="left-panel">
+    <div class="panel-label">Tools</div>
+    <div id="tools-container"></div>
+    <div style="margin-top:4px;padding:0 4px;display:none" id="brush-controls">
+      <div style="color:var(--text-light);font-size:10px;margin-bottom:3px">Size: <span id="brush-size-label">10</span>px</div>
+      <input type="range" min="2" max="40" value="10" class="brush-slider" id="brush-slider">
+    </div>
+
+    <div class="divider">
+      <div class="panel-label">Template</div>
+      <div id="auto-detect-msg" style="display:none;color:var(--gbif-green);font-size:10px;margin-bottom:4px"></div>
+      <select class="template-select" id="template-select"></select>
+      <select class="view-select" id="view-select"></select>
+      <div style="color:var(--text-light);font-size:10px;margin-top:2px" id="template-info"></div>
+    </div>
+
+    <div class="divider">
+      <div class="panel-label">SAM2.1 Segmentation</div>
+      <div class="sam-status-box">
+        <span class="sam-dot off" id="sam-dot"></span>
+        <span id="sam-status-text">Connecting...</span>
+      </div>
+      <button class="segment-btn" id="segment-btn" disabled>⚡ Segment Region</button>
+      <div style="color:var(--text-light);font-size:9px;margin-top:4px;line-height:1.4" id="sam-help">
+        Draw points or bbox, then click Segment.
+      </div>
+    </div>
+
+    <div class="divider">
+      <div class="panel-label">Import</div>
+      <label class="export-btn secondary" style="text-align:center;cursor:pointer;display:block;margin-bottom:0">
+        📂 Load COCO JSON
+        <input type="file" accept=".json" id="coco-import" style="display:none">
+      </label>
+    </div>
+
+    <div class="tip-text">
+      <strong>Shortcuts:</strong><br>
+      B=Box P=Point K=Kpt D=Brush E=Eraser<br>
+      Ctrl+Z=Undo Ctrl+Y=Redo<br>
+      1-9=Region · S=Segment
+    </div>
+  </div>
+
+  <div class="center">
+    <div class="search-bar">
+      <div class="search-row">
+        <select class="search-select" id="search-mode">
+          <option value="species">Species Name</option>
+          <option value="occurrence">Occurrence ID</option>
+        </select>
+        <input class="search-input" id="search-input" placeholder="e.g. Tetramorium caespitum">
+        <button class="search-btn" id="search-btn">Search GBIF</button>
+      </div>
+      <div id="results-container"></div>
+      <div class="url-row">
+        <input class="url-input" id="url-input" placeholder="Or paste image URL directly...">
+        <button class="url-btn" id="url-btn">Load</button>
+      </div>
+    </div>
+    <div class="canvas-area">
+      <div class="canvas-container" id="canvas-container">
+        <canvas id="img-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
+        <div class="canvas-placeholder" id="canvas-placeholder">
+          <div><div class="ph-icon">🔬</div><div>Search GBIF or paste an image URL to begin</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="status-bar">
+      <span>Tool: <span class="hl" id="status-tool">bbox</span></span>
+      <span>Region: <span id="status-region" style="color:var(--text-light)">none</span></span>
+      <span id="status-template"></span>
+      <span id="status-progress">0/0</span>
+      <span id="status-uri" style="color:var(--text-light);font-size:9px"></span>
+    </div>
+  </div>
+
+  <div class="right-panel">
+    <div class="panel-tabs">
+      <button class="panel-tab active" data-tab="regions" id="tab-regions">Regions</button>
+      <button class="panel-tab" data-tab="export" id="tab-export">Export</button>
+    </div>
+    <div class="panel-content" id="panel-content"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// COLORS & ATTRIBUTES
+// ═══════════════════════════════════════════════════════════════════════
+const COLORS=["#e53935","#f9a825","#43a047","#1e88e5","#8e24aa","#d81b60","#00acc1","#fb8c00","#7cb342","#26a69a","#5c6bc0","#ab47bc","#039be5","#c0ca33","#66bb6a","#7e57c2","#c62828","#00838f","#558b2f","#6a1b9a"];
+function c(i){return COLORS[i%COLORS.length]}
+const ATTR={
+  texture:["smooth","rugose","striate","punctate","areolate","reticulate","granulate","coriaceous","alutaceous","shagreened","imbricate","tuberculate","verrucose","foveate"],
+  sculpture:["carinae","costulae","costae","foveae","sulci","rugae","striae","none"],
+  setae:["absent","sparse","dense","appressed","erect","suberect","decumbent","plumose","scale-like","spatulate","simple","branched"],
+  color:["black","dark brown","brown","light brown","yellow","orange","red","ferruginous","testaceous","piceous","castaneous","flavous","ochraceous","white","cream","metallic green","metallic blue","metallic copper","bicolored","mottled","striped","banded"],
+  color_pattern:["uniform","bicolored","tricolored","mottled","spotted","striped","banded","maculate","vittate","fasciate"],
+  shape:["convex","flat","concave","angular","rounded","emarginate","truncate","acuminate","acute","obtuse"],
+  margin:["entire","crenulate","serrate","dentate","sinuate","carinate","lamellate"],
+  surface_covering:["bare","pruinose","tomentose","sericeous","pubescent","pilose","villous","lanate","setose"],
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// MORPHOLOGY TEMPLATES (abbreviated — same as v2)
+// ═══════════════════════════════════════════════════════════════════════
+const FORMICIDAE={
+  head_dorsal:{group:"Formicidae",view:"Head (dorsal)",regions:[
+    {id:"mandible",label:"Mandible",color:c(0),ontology:"HAO:0000506"},{id:"clypeus",label:"Clypeus",color:c(1),ontology:"HAO:0000212"},
+    {id:"frons",label:"Frons",color:c(2),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(3),ontology:"HAO:0000217"},
+    {id:"antenna_scape",label:"Antennal Scape",color:c(4),ontology:"HAO:0000908"},{id:"antenna_funiculus",label:"Funiculus",color:c(5),ontology:"HAO:0000357"},
+    {id:"gena",label:"Gena",color:c(6),ontology:"HAO:0000371"},{id:"vertex",label:"Vertex",color:c(7),ontology:"HAO:0001077"},
+    {id:"occiput",label:"Occiput",color:c(8),ontology:"HAO:0000658"},{id:"frontal_carina",label:"Frontal Carina",color:c(9),ontology:"HAO:0000355"},
+    {id:"antennal_scrobe",label:"Antennal Scrobe",color:c(10),ontology:"HAO:0000908"},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  head_frontal:{group:"Formicidae",view:"Head (full-face)",regions:[
+    {id:"mandible",label:"Mandible",color:c(0),ontology:"HAO:0000506"},{id:"clypeus",label:"Clypeus",color:c(1),ontology:"HAO:0000212"},
+    {id:"frons",label:"Frons",color:c(2),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(3),ontology:"HAO:0000217"},
+    {id:"frontal_lobe",label:"Frontal Lobe",color:c(4),ontology:"HAO:0000354"},{id:"antennal_insertion",label:"Antennal Insertion",color:c(5),ontology:"HAO:0000908"},
+    {id:"gena",label:"Gena",color:c(6),ontology:"HAO:0000371"},{id:"posterior_margin",label:"Posterior Head Margin",color:c(7),ontology:"HAO:0000658"},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,margin:ATTR.margin}},
+  mesosoma_lateral:{group:"Formicidae",view:"Mesosoma (lateral)",regions:[
+    {id:"pronotum",label:"Pronotum",color:c(0),ontology:"HAO:0000853"},{id:"mesonotum",label:"Mesonotum",color:c(1),ontology:"HAO:0000575"},
+    {id:"mesopleuron",label:"Mesopleuron",color:c(2),ontology:"HAO:0000566"},{id:"propodeum",label:"Propodeum",color:c(3),ontology:"HAO:0000862"},
+    {id:"propodeal_spine",label:"Propodeal Spine",color:c(4),ontology:"HAO:0000860"},{id:"metapleuron",label:"Metapleuron",color:c(5),ontology:"HAO:0000621"},
+    {id:"promesonotal_suture",label:"Promesonotal Suture",color:c(6),ontology:"HAO:0000853"},{id:"metanotal_groove",label:"Metanotal Groove",color:c(7),ontology:"HAO:0000614"},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape}},
+  waist:{group:"Formicidae",view:"Waist",regions:[
+    {id:"petiole",label:"Petiole",color:c(0),ontology:"HAO:0000757"},{id:"petiolar_node",label:"Petiolar Node",color:c(1),ontology:"HAO:0000757"},
+    {id:"subpetiolar_process",label:"Subpetiolar Process",color:c(2),ontology:"HAO:0000757"},{id:"postpetiole",label:"Postpetiole",color:c(3),ontology:"HAO:0000816"},
+    {id:"helcium",label:"Helcium",color:c(4),ontology:"HAO:0000399"},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape}},
+  gaster:{group:"Formicidae",view:"Gaster",regions:[
+    {id:"first_gastral_tergite",label:"1st Gastral Tergite",color:c(0),ontology:"HAO:0001005"},
+    {id:"first_gastral_sternite",label:"1st Gastral Sternite",color:c(1),ontology:"HAO:0000950"},
+    {id:"sting",label:"Sting/Acidopore",color:c(2),ontology:"HAO:0000929"},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+};
+const COLEOPTERA={habitus_dorsal:{group:"Coleoptera",view:"Habitus (dorsal)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"COLAO:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"COLAO:0000002"},
+  {id:"scutellum",label:"Scutellum",color:c(2),ontology:"COLAO:0000003"},{id:"elytra",label:"Elytra",color:c(3),ontology:"COLAO:0000004"},
+  {id:"elytral_striae",label:"Elytral Striae",color:c(4),ontology:"COLAO:0000005"},{id:"humeral_angle",label:"Humeral Angle",color:c(5),ontology:"COLAO:0000007"},
+  {id:"antenna",label:"Antenna",color:c(6),ontology:"COLAO:0000008"},{id:"leg",label:"Leg",color:c(7),ontology:"COLAO:0000009"},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+const LEPIDOPTERA={wings_dorsal:{group:"Lepidoptera",view:"Wings (dorsal)",regions:[
+  {id:"forewing",label:"Forewing",color:c(0),ontology:"HAO:0001094"},{id:"hindwing",label:"Hindwing",color:c(1),ontology:"HAO:0001094"},
+  {id:"fw_discal_cell",label:"FW Discal Cell",color:c(2),ontology:"LEP:0000002"},{id:"fw_margin",label:"FW Outer Margin",color:c(3),ontology:"LEP:0000005"},
+  {id:"hw_discal_cell",label:"HW Discal Cell",color:c(4),ontology:"LEP:0000006"},{id:"body",label:"Body/Thorax",color:c(5),ontology:"LEP:0000008"},
+],attributes:{color:ATTR.color,color_pattern:["uniform","spotted","striped","banded","ocellate","mottled","iridescent"],scales:["powdery","glossy","metallic","transparent","dense","sparse"]}}};
+const DIPTERA={habitus_lateral:{group:"Diptera",view:"Habitus (lateral)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"HAO:0000397"},{id:"thorax",label:"Thorax",color:c(1),ontology:"HAO:0001013"},
+  {id:"wing",label:"Wing",color:c(2),ontology:"HAO:0001094"},{id:"haltere",label:"Haltere",color:c(3),ontology:"HAO:0000393"},
+  {id:"abdomen",label:"Abdomen",color:c(4),ontology:"HAO:0000015"},{id:"leg",label:"Leg",color:c(5),ontology:"HAO:0000494"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,surface_covering:ATTR.surface_covering}}};
+const HYMENOPTERA={habitus_lateral:{group:"Hymenoptera",view:"Habitus (lateral)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"HAO:0000397"},{id:"mesosoma",label:"Mesosoma",color:c(1),ontology:"HAO:0000576"},
+  {id:"propodeum",label:"Propodeum",color:c(2),ontology:"HAO:0000862"},{id:"metasoma",label:"Metasoma",color:c(3),ontology:"HAO:0000626"},
+  {id:"petiole",label:"Petiole",color:c(4),ontology:"HAO:0000757"},{id:"wing",label:"Forewing",color:c(5),ontology:"HAO:0001094"},
+  {id:"ovipositor",label:"Ovipositor/Sting",color:c(6),ontology:"HAO:0000679"},{id:"leg",label:"Leg",color:c(7),ontology:"HAO:0000494"},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color}}};
+const HEMIPTERA={habitus_dorsal:{group:"Hemiptera",view:"Habitus (dorsal)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"HEM:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"HEM:0000002"},
+  {id:"scutellum",label:"Scutellum",color:c(2),ontology:"HEM:0000003"},{id:"corium",label:"Corium",color:c(3),ontology:"HEM:0000005"},
+  {id:"membrane",label:"Hemelytral Membrane",color:c(4),ontology:"HEM:0000006"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+const ORTHOPTERA={habitus_lateral:{group:"Orthoptera",view:"Habitus (lateral)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"ORT:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"ORT:0000003"},
+  {id:"tegmen",label:"Tegmen",color:c(2),ontology:"ORT:0000005"},{id:"hind_femur",label:"Hind Femur",color:c(3),ontology:"ORT:0000007"},
+  {id:"hind_tibia",label:"Hind Tibia",color:c(4),ontology:"ORT:0000008"},{id:"cerci",label:"Cerci",color:c(5),ontology:"ORT:0000009"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+const ODONATA={habitus_lateral:{group:"Odonata",view:"Habitus (lateral)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"ODO:0000001"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
+  {id:"synthorax",label:"Synthorax",color:c(2),ontology:"ODO:0000002"},{id:"forewing",label:"Forewing",color:c(3),ontology:"ODO:0000003"},
+  {id:"hindwing",label:"Hindwing",color:c(4),ontology:"ODO:0000004"},{id:"abdomen",label:"Abdomen",color:c(5),ontology:"ODO:0000006"},
+],attributes:{color:ATTR.color,color_pattern:["uniform","banded","spotted","pruinose","metallic"],wing_marking:["hyaline","tinted","banded","spotted","infuscate"]}}};
+const ARANEAE={habitus_dorsal:{group:"Araneae",view:"Habitus (dorsal)",regions:[
+  {id:"cephalothorax",label:"Prosoma",color:c(0),ontology:"SPD:0000001"},{id:"eye_arrangement",label:"Eye Arrangement",color:c(1),ontology:"SPD:0000002"},
+  {id:"chelicerae",label:"Chelicerae",color:c(2),ontology:"SPD:0000003"},{id:"pedipalp",label:"Pedipalp",color:c(3),ontology:"SPD:0000004"},
+  {id:"abdomen",label:"Opisthosoma",color:c(4),ontology:"SPD:0000006"},{id:"spinnerets",label:"Spinnerets",color:c(5),ontology:"SPD:0000007"},
+  {id:"leg_I",label:"Leg I",color:c(6),ontology:"SPD:0000008"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+const CRUSTACEA={habitus_dorsal:{group:"Crustacea",view:"Habitus (dorsal)",regions:[
+  {id:"carapace",label:"Carapace",color:c(0),ontology:"CRU:0000001"},{id:"eye",label:"Eye/Eyestalk",color:c(1),ontology:"CRU:0000003"},
+  {id:"cheliped",label:"Cheliped",color:c(2),ontology:"CRU:0000006"},{id:"pereiopod",label:"Pereiopod",color:c(3),ontology:"CRU:0000007"},
+  {id:"pleon",label:"Pleon/Abdomen",color:c(4),ontology:"CRU:0000008"},{id:"uropod",label:"Uropod",color:c(5),ontology:"CRU:0000009"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}}};
+const GENERIC_INSECTA={habitus_dorsal:{group:"Insecta (generic)",view:"Habitus (dorsal)",regions:[
+  {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
+  {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"pronotum",label:"Pronotum",color:c(3),ontology:"HAO:0000853"},
+  {id:"mesonotum",label:"Mesonotum",color:c(4),ontology:"HAO:0000575"},{id:"forewing",label:"Forewing",color:c(5),ontology:"HAO:0001094"},
+  {id:"hindwing",label:"Hindwing",color:c(6),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(7),ontology:"HAO:0000015"},
+  {id:"leg",label:"Leg",color:c(8),ontology:"HAO:0000494"},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+const GENERIC_ARTHROPODA={habitus:{group:"Arthropoda (generic)",view:"Whole specimen",regions:[
+  {id:"head",label:"Head/Cephalon",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax",color:c(1),ontology:"UBERON:0000915"},
+  {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"appendage",label:"Appendage",color:c(3),ontology:"UBERON:0000026"},
+  {id:"eye",label:"Eye",color:c(4),ontology:"UBERON:0000019"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
+],attributes:{texture:ATTR.texture,color:ATTR.color,color_pattern:ATTR.color_pattern}}};
+
+const TAXON_TEMPLATES={Coleoptera:COLEOPTERA,Lepidoptera:LEPIDOPTERA,Diptera:DIPTERA,Hemiptera:HEMIPTERA,Orthoptera:ORTHOPTERA,Odonata:ODONATA,
+  Formicidae:FORMICIDAE,Araneae:ARANEAE,Arachnida:ARANEAE,Crustacea:CRUSTACEA,Malacostraca:CRUSTACEA,
+  Hymenoptera:HYMENOPTERA,Apidae:HYMENOPTERA,Vespidae:HYMENOPTERA,Ichneumonidae:HYMENOPTERA,
+  Insecta:GENERIC_INSECTA,Arthropoda:GENERIC_ARTHROPODA};
+const ALL_TEMPLATES={};
+function reg(g,o){Object.entries(o).forEach(([k,v])=>{ALL_TEMPLATES[g+'__'+k]=v})}
+reg("Formicidae",FORMICIDAE);reg("Coleoptera",COLEOPTERA);reg("Lepidoptera",LEPIDOPTERA);reg("Diptera",DIPTERA);
+reg("Hymenoptera",HYMENOPTERA);reg("Hemiptera",HEMIPTERA);reg("Orthoptera",ORTHOPTERA);reg("Odonata",ODONATA);
+reg("Araneae",ARANEAE);reg("Crustacea",CRUSTACEA);reg("Insecta",GENERIC_INSECTA);reg("Arthropoda",GENERIC_ARTHROPODA);
+
+// ═══════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════
+const $=id=>document.getElementById(id);
+let state={imageUrl:"",tool:"bbox",brushSize:10,templateGroupKey:"Formicidae",viewKey:"head_dorsal",
+  regions:[],activeRegion:null,occurrenceData:null,sidePanel:"regions",expandedRegion:null,
+  isDrawing:false,startPos:null,imgDims:{w:0,h:0,scale:1,ox:0,oy:0},img:null,imgLoaded:false,
+  annotationURI:"",undoStack:[],redoStack:[]};
+
+// ═══════════════════════════════════════════════════════════════════════
+// SAM2.1 ONNX CLIENT
+// ═══════════════════════════════════════════════════════════════════════
+const SAM2={
+  apiBase:'',session:null,ready:false,embedding:null,embedding_id:null,origSize:null,inputSize:null,encoding:false,
+
+  init(){
+    this.apiBase=window.location.origin;
+    this.checkHealth();
+  },
+
+  async checkHealth(){
+    setSamStatus('off','Connecting...');
+    try{
+      const r=await fetch(this.apiBase+'/health',{signal:AbortSignal.timeout(5000)});
+      const d=await r.json();
+      if(d.status==='ok'&&d.encoder_loaded){
+        setSamStatus('ready','Encoder ready');
+        if(d.onnx_decoder_available) this.loadDecoder();
+        else setSamStatus('ready','Encoder only (no ONNX decoder)');
+        return true;
+      }
+      setSamStatus('off','Encoder not loaded');return false;
+    }catch(e){setSamStatus('off','API unreachable');return false}
+  },
+
+  async loadDecoder(){
+    if (this.session) return;
+
+    setSamStatus('encoding','Loading ONNX decoder...');
+    try{
+      // Ensure ORT can find its WASM binaries
+      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
+      // Avoid COOP/COEP + SharedArrayBuffer requirements
+      ort.env.wasm.numThreads = 1;
+
+      // NOTE: ORT Web commonly uses "cpu" here (WASM backend)
+      this.session = await ort.InferenceSession.create(
+        this.apiBase + '/onnx/decoder.onnx',
+        { executionProviders: ['cpu'] }
+      );
+
+      this.ready = true;
+      setSamStatus('ready','Decoder ready — draw prompts & click Segment');
+      $('segment-btn').disabled = false;
+      showToast('SAM2.1 decoder loaded');
+    }catch(e){
+      console.error('ONNX load failed:', e);
+      this.ready = false;
+      this.session = null;
+      $('segment-btn').disabled = true;
+
+      const msg = (e && e.message !== undefined) ? e.message : String(e);
+      setSamStatus('off','ONNX decoder failed: ' + msg);
+      showToast('ONNX decoder failed — check console');
+    }
+  },
+
+  getProxyUrl(url){return this.apiBase+'/proxy-image?url='+encodeURIComponent(url)},
+
+  async encodeImage(imageUrl){
+    if(this.encoding)return;
+    this.encoding=true;this.embedding=null;
+    setSamStatus('encoding','Encoding image (15-30s)...');
+    $('segment-btn').disabled=true;
+    try{
+      const r=await fetch(this.apiBase+'/encode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_url:imageUrl})});
+      if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.statusText);
+      const buf=await r.arrayBuffer();
+      this.embedding=this.unpack(buf);
+      this.origSize={w:parseInt(r.headers.get('X-Orig-Width'))||state.imgDims.w,h:parseInt(r.headers.get('X-Orig-Height'))||state.imgDims.h};
+      this.embedding_id = r.headers.get('X-Embedding-Id') || null;
+      const cached=r.headers.get('X-Cached')==='true';
+      this.encoding=false;
+      if (this.ready) {
+        $('segment-btn').disabled = false;
+        setSamStatus('ready', cached ? 'Cached — ready to segment' : 'Encoded — ready to segment');
+      } else {
+        if (this.embedding) {
+          $('segment-btn').disabled = false;
+          setSamStatus('ready', cached ? 'Cached — click Segment' : 'Encoded — click Segment');
+        }
+       }
+
+      showToast('Image encoded for SAM2');
+    }catch(e){
+      this.encoding=false;
+      setSamStatus('off','Encode failed: '+e.message);
+      console.error(e);
+    }
+  },
+
+  unpack(buf){
+    const v=new DataView(buf);let o=0;
+    const magic=String.fromCharCode(v.getUint8(0),v.getUint8(1),v.getUint8(2),v.getUint8(3));
+    if(magic!=='SAM2')throw new Error('Invalid format');o=4;
+    v.getUint32(o,true);o+=4;const origH=v.getUint32(o,true);o+=4;const origW=v.getUint32(o,true);o+=4;
+    const inputH=v.getUint32(o,true);o+=4;const inputW=v.getUint32(o,true);o+=4;
+    const nt=v.getUint32(o,true);o+=4;o+=4;
+    const tensors={};
+    for(let t=0;t<nt;t++){
+      const nl=v.getUint32(o,true);o+=4;
+      const name=new TextDecoder().decode(new Uint8Array(buf,o,nl));o+=nl;
+      const nd=v.getUint32(o,true);o+=4;
+      const shape=[];for(let d=0;d<nd;d++){shape.push(v.getUint32(o,true));o+=4}
+      const dt=v.getUint32(o,true);o+=4;const dl=v.getUint32(o,true);o+=4;
+      const raw = new Uint8Array(buf, o, dl);
+      o += dl;
+
+      // Make an aligned, standalone buffer (offset = 0)
+      const rawBuf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+
+      let data;
+      if (dt === 1) { // float16 stored as uint16
+        if (rawBuf.byteLength % 2 !== 0) throw new Error(`Bad f16 byte length for ${name}: ${rawBuf.byteLength}`);
+        const f16 = new Uint16Array(rawBuf);
+        data = new Float32Array(f16.length);
+        for (let i = 0; i < f16.length; i++) data[i] = f16to32(f16[i]);
+      } else { // float32
+        if (rawBuf.byteLength % 4 !== 0) throw new Error(`Bad f32 byte length for ${name}: ${rawBuf.byteLength}`);
+        data = new Float32Array(rawBuf);
+      }
+
+      tensors[name] = { data, shape };
+    }
+    this.inputSize={w:inputW,h:inputH};
+    return tensors;
+  },
+
+  async predict(prompts){
+    if(!this.session||!this.embedding)return null;
+    const e=this.embedding;
+    const coords=new Float32Array(32);const labels=new Float32Array(16).fill(-1);
+    let idx=0;
+    const sx=this.inputSize.w/this.origSize.w,sy=this.inputSize.h/this.origSize.h;
+    if(prompts.points)prompts.points.forEach(p=>{if(idx<16){coords[idx*2]=p.x*sx;coords[idx*2+1]=p.y*sy;labels[idx]=p.positive!==false?1:0;idx++}});
+    if(prompts.bboxes)prompts.bboxes.forEach(b=>{if(idx<15){coords[idx*2]=b.x*sx;coords[idx*2+1]=b.y*sy;labels[idx]=2;idx++;coords[idx*2]=(b.x+b.w)*sx;coords[idx*2+1]=(b.y+b.h)*sy;labels[idx]=3;idx++}});
+    if(idx===0)return null;
+    const t0=performance.now();
+    const feeds={
+      image_embed:new ort.Tensor('float32',e.image_embed.data,e.image_embed.shape),
+      high_res_feats_0:new ort.Tensor('float32',e.high_res_feats_0.data,e.high_res_feats_0.shape),
+      high_res_feats_1:new ort.Tensor('float32',e.high_res_feats_1.data,e.high_res_feats_1.shape),
+      point_coords:new ort.Tensor('float32',coords,[1,16,2]),
+      point_labels:new ort.Tensor('float32',labels,[1,16]),
+      mask_input:new ort.Tensor('float32',new Float32Array(65536),[1,1,256,256]),
+      has_mask_input:new ort.Tensor('float32',new Float32Array([0]),[1]),
+    };
+    const res=await this.session.run(feeds);
+    const ms=performance.now()-t0;
+    const masks=res.masks,scores=res.iou_predictions;
+    const best={idx:0,score:scores.data[0]};
+    for(let i=1;i<3;i++)if(scores.data[i]>best.score){best.idx=i;best.score=scores.data[i]}
+    const mdata=masks.data.slice(best.idx*65536,(best.idx+1)*65536);
+    const binary=new Uint8Array(65536);for(let i=0;i<65536;i++)binary[i]=mdata[i]>0?1:0;
+    console.log(`SAM2 predict: ${ms.toFixed(0)}ms, score=${best.score.toFixed(3)}`);
+    return{maskData:binary,maskW:256,maskH:256,score:best.score};
+  },
+};
+
+function f16to32(h){const s=(h>>15)&1,e=(h>>10)&0x1f,m=h&0x3ff;if(e===0)return m===0?(s?-0:0):(s?-1:1)*Math.pow(2,-14)*(m/1024);if(e===31)return m?NaN:(s?-Infinity:Infinity);return(s?-1:1)*Math.pow(2,e-15)*(1+m/1024)}
+function setSamStatus(cls,text){$('sam-dot').className='sam-dot '+cls;$('sam-status-text').textContent=text}
+function showToast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ANNOTATION URI
+// ═══════════════════════════════════════════════════════════════════════
+function generateURI(){state.annotationURI='urn:descriptron:annotation:'+Date.now().toString(36)+'-'+Math.random().toString(36).substring(2,8);$('status-uri').textContent=state.annotationURI}
+generateURI();
+
+// ═══════════════════════════════════════════════════════════════════════
+// UNDO/REDO
+// ═══════════════════════════════════════════════════════════════════════
+function saveUndo(){state.undoStack.push(JSON.parse(JSON.stringify(state.regions.map(r=>({id:r.id,annotations:r.annotations,attributes:r.attributes,notes:r.notes,sam2_mask:r.sam2_mask})))));if(state.undoStack.length>50)state.undoStack.shift();state.redoStack=[]}
+function undo(){if(!state.undoStack.length)return;state.redoStack.push(JSON.parse(JSON.stringify(state.regions.map(r=>({id:r.id,annotations:r.annotations,attributes:r.attributes,notes:r.notes,sam2_mask:r.sam2_mask})))));const p=state.undoStack.pop();p.forEach(s=>{const r=state.regions.find(r=>r.id===s.id);if(r){r.annotations=s.annotations;r.attributes=s.attributes;r.notes=s.notes;r.sam2_mask=s.sam2_mask}});renderOverlay();renderRegions();updateStatus()}
+function redo(){if(!state.redoStack.length)return;state.undoStack.push(JSON.parse(JSON.stringify(state.regions.map(r=>({id:r.id,annotations:r.annotations,attributes:r.attributes,notes:r.notes,sam2_mask:r.sam2_mask})))));const n=state.redoStack.pop();n.forEach(s=>{const r=state.regions.find(r=>r.id===s.id);if(r){r.annotations=s.annotations;r.attributes=s.attributes;r.notes=s.notes;r.sam2_mask=s.sam2_mask}});renderOverlay();renderRegions();updateStatus()}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TEMPLATE SYSTEM
+// ═══════════════════════════════════════════════════════════════════════
+function autoDetect(occ){for(const k of[occ.family,occ.order,occ.class,"Insecta","Arthropoda"]){if(k&&TAXON_TEMPLATES[k]){const g=TAXON_TEMPLATES[k],fk=Object.keys(g)[0];for(const[ak,av]of Object.entries(ALL_TEMPLATES)){if(av===g[fk]){const p=ak.split("__");state.templateGroupKey=p[0];state.viewKey=p[1];loadTemplate();$('auto-detect-msg').style.display='block';$('auto-detect-msg').innerHTML=`Detected: <strong>${k}</strong> <span class="auto-badge">AUTO</span>`;return k}}}}return null}
+function loadTemplate(){const k=`${state.templateGroupKey}__${state.viewKey}`,t=ALL_TEMPLATES[k];if(!t)return;state.regions=t.regions.map(r=>({...r,annotations:[],attributes:{},notes:"",templateAttributes:t.attributes,sam2_mask:null}));state.activeRegion=t.regions[0]?.id||null;state.expandedRegion=null;state.undoStack=[];state.redoStack=[];renderRegions();renderOverlay();updateStatus();$('template-info').textContent=`${t.regions.length} regions · ${t.group}`;$('status-template').textContent=`${t.group} — ${t.view}`;updateViewSelect()}
+function updateViewSelect(){const vs=$('view-select'),pf=state.templateGroupKey+"__";vs.innerHTML=Object.keys(ALL_TEMPLATES).filter(k=>k.startsWith(pf)).map(k=>{const vk=k.replace(pf,""),t=ALL_TEMPLATES[k];return`<option value="${vk}"${vk===state.viewKey?' selected':''}>${t.view}</option>`}).join('')}
+function initTemplateSelect(){const s=$('template-select');s.innerHTML=Object.keys(Object.fromEntries(Object.keys(ALL_TEMPLATES).map(k=>[k.split("__")[0],1]))).map(g=>`<option value="${g}"${g===state.templateGroupKey?' selected':''}>${g}</option>`).join('');s.addEventListener('change',()=>{state.templateGroupKey=s.value;const f=Object.keys(ALL_TEMPLATES).find(k=>k.startsWith(s.value+"__"));state.viewKey=f?f.replace(s.value+"__",""):"";$('auto-detect-msg').style.display='none';loadTemplate()});$('view-select').addEventListener('change',()=>{state.viewKey=$('view-select').value;loadTemplate()});updateViewSelect()}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TOOLS
+// ═══════════════════════════════════════════════════════════════════════
+function initTools(){const tools=[{id:"bbox",icon:"▢",label:"Bounding Box",sc:"B"},{id:"point",icon:"◉",label:"Point Prompt",sc:"P"},{id:"brush",icon:"🖌",label:"Paintbrush",sc:"D"},{id:"eraser",icon:"⌫",label:"Eraser",sc:"E"},{id:"keypoint",icon:"📌",label:"Keypoint",sc:"K"},{id:"undo",icon:"↩",label:"Undo",sc:"Z"},{id:"redo",icon:"↪",label:"Redo",sc:"Y"}];$('tools-container').innerHTML=tools.map(t=>`<button class="tool-btn${t.id===state.tool?' active':''}" data-tool="${t.id}"><span class="icon">${t.icon}</span><span>${t.label}</span><span class="shortcut">${t.sc}</span></button>`).join('');$('tools-container').querySelectorAll('.tool-btn').forEach(b=>b.addEventListener('click',()=>{const t=b.dataset.tool;if(t==='undo'){undo();return}if(t==='redo'){redo();return}setTool(t)}))}
+function setTool(t){state.tool=t;document.querySelectorAll('.tool-btn').forEach(b=>{if(!['undo','redo'].includes(b.dataset.tool))b.classList.toggle('active',b.dataset.tool===t)});$('brush-controls').style.display=(t==='brush'||t==='eraser')?'block':'none';$('overlay-canvas').style.cursor={bbox:"crosshair",point:"crosshair",brush:"cell",eraser:"cell",keypoint:"crosshair"}[t]||"default";$('status-tool').textContent=t}
+
+// ═══════════════════════════════════════════════════════════════════════
+// GBIF SEARCH
+// ═══════════════════════════════════════════════════════════════════════
+async function searchGBIF(){const q=$('search-input').value.trim(),m=$('search-mode').value;if(!q)return;$('search-btn').disabled=true;$('search-btn').textContent='...';try{let res=[];if(m==='occurrence'){const r=await fetch(`https://api.gbif.org/v1/occurrence/${q}`);const d=await r.json();if(d.media?.length)res=[d]}else{const sr=await fetch(`https://api.gbif.org/v1/species/match?name=${encodeURIComponent(q)}`);const sd=await sr.json();if(sd.usageKey){const r=await fetch(`https://api.gbif.org/v1/occurrence/search?taxonKey=${sd.usageKey}&mediaType=StillImage&limit=20`);res=(await r.json()).results||[]}}renderResults(res)}catch(e){console.error(e);renderResults([])}finally{$('search-btn').disabled=false;$('search-btn').textContent='Search GBIF'}}
+function renderResults(res){const c=$('results-container');if(!res.length){c.innerHTML='';return}c.innerHTML=`<div class="results-list">${res.map((o,i)=>{const img=o.media?.find(m=>m.type==='StillImage')||o.media?.[0];return`<div class="result-item" data-idx="${i}">${img?.identifier?`<img src="${img.identifier}" class="result-thumb" crossorigin="anonymous" onerror="this.style.display='none'">`:'<div class="result-thumb"></div>'}<div style="flex:1;min-width:0"><div class="result-name">${o.scientificName||o.species||'Unknown'}</div><div class="result-meta">${o.institutionCode||''} · ${o.order||''} · ID:${o.key||o.gbifID}</div></div></div>`}).join('')}</div>`;c.querySelectorAll('.result-item').forEach(el=>el.addEventListener('click',()=>{selectOcc(res[parseInt(el.dataset.idx)]);c.innerHTML=''}))}
+function selectOcc(occ){const media=occ.media?.find(m=>m.type==='StillImage')||occ.media?.[0];if(!media?.identifier)return;state.occurrenceData={occurrenceID:occ.key||occ.gbifID,scientificName:occ.scientificName||'',species:occ.species||'',family:occ.family||'',order:occ.order||'',class:occ.class||'',phylum:occ.phylum||'',institutionCode:occ.institutionCode||'',catalogNumber:occ.catalogNumber||'',locality:occ.locality||'',country:occ.country||'',decimalLatitude:occ.decimalLatitude,decimalLongitude:occ.decimalLongitude,imageURL:media.identifier};$('specimen-info').style.display='block';$('specimen-name').textContent=state.occurrenceData.scientificName;$('specimen-meta').textContent=`GBIF:${state.occurrenceData.occurrenceID} · ${state.occurrenceData.family||''} (${state.occurrenceData.order||''})`;autoDetect(state.occurrenceData);generateURI();loadImage(media.identifier)}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IMAGE LOADING (via proxy)
+// ═══════════════════════════════════════════════════════════════════════
+function loadImage(url){state.imageUrl=url;state.imgLoaded=false;$('url-input').value=url;$('canvas-placeholder').style.display='flex';$('canvas-placeholder').innerHTML='<div><div class="ph-icon">⏳</div><div>Loading...</div></div>';const proxyUrl=SAM2.apiBase?SAM2.getProxyUrl(url):url;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{state.img=img;state.imgLoaded=true;drawImage();SAM2.encodeImage(url)};img.onerror=()=>{const img2=new Image();img2.onload=()=>{state.img=img2;state.imgLoaded=true;drawImage();SAM2.encodeImage(url)};img2.onerror=()=>{$('canvas-placeholder').innerHTML='<div><div class="ph-icon">⚠️</div><div>Failed to load image</div></div>'};img2.src=url};img.src=proxyUrl}
+function drawImage(){if(!state.imgLoaded||!state.img)return;$('canvas-placeholder').style.display='none';const ct=$('canvas-container'),cw=ct.clientWidth,ch=ct.clientHeight;const ic=$('img-canvas'),oc=$('overlay-canvas');ic.width=cw;ic.height=ch;oc.width=cw;oc.height=ch;const img=state.img,scale=Math.min(cw/img.width,ch/img.height),ox=(cw-img.width*scale)/2,oy=(ch-img.height*scale)/2;state.imgDims={w:img.width,h:img.height,scale,ox,oy};const ctx=ic.getContext('2d');ctx.clearRect(0,0,cw,ch);ctx.fillStyle='#e8e8e8';ctx.fillRect(0,0,cw,ch);ctx.drawImage(img,ox,oy,img.width*scale,img.height*scale);renderOverlay()}
+
+// ═══════════════════════════════════════════════════════════════════════
+// OVERLAY RENDERING (annotations + SAM2 masks)
+// ═══════════════════════════════════════════════════════════════════════
+function renderOverlay(){const o=$('overlay-canvas');if(!o.width)return;const ctx=o.getContext('2d');ctx.clearRect(0,0,o.width,o.height);const d=state.imgDims;
+state.regions.forEach(r=>{const col=r.color||'#fff';
+  // SAM2 mask
+  if(r.sam2_mask){
+    const m=r.sam2_mask,tmp=document.createElement('canvas');tmp.width=m.maskW;tmp.height=m.maskH;const tc=tmp.getContext('2d');const id=tc.createImageData(m.maskW,m.maskH);
+    const rgb=hexToRgb(col);for(let i=0;i<m.maskData.length;i++){const px=i*4;if(m.maskData[i]){id.data[px]=rgb.r;id.data[px+1]=rgb.g;id.data[px+2]=rgb.b;id.data[px+3]=90}}
+    tc.putImageData(id,0,0);ctx.drawImage(tmp,d.ox,d.oy,d.w*d.scale,d.h*d.scale);
+  }
+  if(!r.annotations)return;
+  r.annotations.filter(a=>a.type==='bbox').forEach(a=>{const x=a.x*d.scale+d.ox,y=a.y*d.scale+d.oy,w=a.w*d.scale,h=a.h*d.scale;ctx.strokeStyle=col;ctx.lineWidth=2;ctx.setLineDash([6,3]);ctx.strokeRect(x,y,w,h);ctx.setLineDash([]);ctx.fillStyle=col+'15';ctx.fillRect(x,y,w,h);ctx.fillStyle=col;ctx.font='bold 11px Roboto';ctx.fillText(r.label,x+3,y-4)});
+  r.annotations.filter(a=>a.type==='point').forEach(a=>{const x=a.x*d.scale+d.ox,y=a.y*d.scale+d.oy;ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle=a.positive?'#43a047':'#e53935';ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='white';ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(a.positive?'+':'−',x,y);ctx.textAlign='start';ctx.textBaseline='alphabetic'});
+  // Keypoints (numbered landmarks)
+  r.annotations.filter(a=>a.type==='keypoint').forEach(a=>{const x=a.x*d.scale+d.ox,y=a.y*d.scale+d.oy;ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.fillStyle=col;ctx.fill();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='white';ctx.font='bold 9px Roboto Mono';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(String(a.number),x,y);ctx.textAlign='start';ctx.textBaseline='alphabetic'});
+  r.annotations.filter(a=>a.type==='stroke'&&!a.eraser).forEach(a=>{if(a.points.length<2)return;ctx.beginPath();ctx.strokeStyle=col+'80';ctx.lineWidth=(a.brushSize||8)*d.scale;ctx.lineCap='round';ctx.lineJoin='round';ctx.moveTo(a.points[0].x*d.scale+d.ox,a.points[0].y*d.scale+d.oy);for(let i=1;i<a.points.length;i++)ctx.lineTo(a.points[i].x*d.scale+d.ox,a.points[i].y*d.scale+d.oy);ctx.stroke()});
+  r.annotations.filter(a=>a.type==='stroke'&&a.eraser).forEach(a=>{if(a.points.length<2)return;ctx.save();ctx.globalCompositeOperation='destination-out';ctx.beginPath();ctx.strokeStyle='rgba(0,0,0,1)';ctx.lineWidth=(a.brushSize||8)*d.scale;ctx.lineCap='round';ctx.lineJoin='round';ctx.moveTo(a.points[0].x*d.scale+d.ox,a.points[0].y*d.scale+d.oy);for(let i=1;i<a.points.length;i++)ctx.lineTo(a.points[i].x*d.scale+d.ox,a.points[i].y*d.scale+d.oy);ctx.stroke();ctx.restore()});
+})}
+function hexToRgb(hex){const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return{r,g,b}}
+async function postJSON(url, obj){
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(obj)
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+function b64ToU8(b64){
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+// ═══════════════════════════════════════════════════════════════════════
+// CANVAS EVENTS
+// ═══════════════════════════════════════════════════════════════════════
+function getCoords(e){const rect=$('overlay-canvas').getBoundingClientRect(),d=state.imgDims;return{ix:(e.clientX-rect.left-d.ox)/d.scale,iy:(e.clientY-rect.top-d.oy)/d.scale}}
+function onMouseDown(e){if(!state.activeRegion||!state.imgLoaded)return;const{ix,iy}=getCoords(e);if(state.tool==='bbox'){saveUndo();state.startPos={x:ix,y:iy};state.isDrawing=true}else if(state.tool==='point'){saveUndo();addAnn(state.activeRegion,{type:'point',x:ix,y:iy,positive:e.button!==2})}else if(state.tool==='keypoint'){saveUndo();const kr=state.regions.find(r=>r.id===state.activeRegion);const kn=kr?kr.annotations.filter(a=>a.type==='keypoint').length:0;addAnn(state.activeRegion,{type:'keypoint',x:ix,y:iy,number:kn+1})}else if(state.tool==='brush'||state.tool==='eraser'){saveUndo();addAnn(state.activeRegion,{type:'stroke',points:[{x:ix,y:iy}],brushSize:state.brushSize,eraser:state.tool==='eraser'});state.isDrawing=true}}
+function onMouseMove(e){if(!state.isDrawing||!state.activeRegion)return;const{ix,iy}=getCoords(e);if(state.tool==='brush'||state.tool==='eraser'){const r=state.regions.find(r=>r.id===state.activeRegion);if(r?.annotations?.length){const l=r.annotations[r.annotations.length-1];if(l.type==='stroke'){l.points.push({x:ix,y:iy});renderOverlay()}}}}
+function onMouseUp(e){if(!state.isDrawing||!state.activeRegion)return;if(state.tool==='bbox'&&state.startPos){const{ix,iy}=getCoords(e);const x=Math.min(state.startPos.x,ix),y=Math.min(state.startPos.y,iy),w=Math.abs(ix-state.startPos.x),h=Math.abs(iy-state.startPos.y);if(w>5&&h>5)addAnn(state.activeRegion,{type:'bbox',x,y,w,h})}state.isDrawing=false;state.startPos=null}
+function addAnn(rid,ann){const r=state.regions.find(r=>r.id===rid);if(r){r.annotations.push(ann);renderOverlay();renderRegions();updateStatus()}}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SAM2 SEGMENT BUTTON
+// ═══════════════════════════════════════════════════════════════════════
+async function runSegment(){
+  if(!SAM2.embedding || !state.activeRegion) return;
+
+  const r = state.regions.find(r => r.id === state.activeRegion);
+  if(!r) return;
+
+  const points = r.annotations.filter(a=>a.type==='point').map(a=>({x:a.x,y:a.y,positive:a.positive}));
+  const bboxes = r.annotations.filter(a=>a.type==='bbox').map(a=>({x:a.x,y:a.y,w:a.w,h:a.h}));
+
+  if(!points.length && !bboxes.length){
+    showToast('Draw points or bbox first');
+    return;
+  }
+
+  $('segment-btn').disabled = true;
+  $('segment-btn').textContent = '⚡ Segmenting...';
+
+  try{
+    saveUndo();
+
+    let mask = null;
+
+    if (SAM2.ready) {
+      // Browser-side decode (your existing path)
+      mask = await SAM2.predict({points,bboxes});
+    } else {
+      // Server-side decode fallback
+      setSamStatus('encoding','Decoding on server...');
+
+      const payload = {
+        // You'll need your FastAPI to accept these fields.
+        // embedding_id is optional if your server can key by image_url,
+        // but embedding_id is best for caching.
+        embedding_id: SAM2.embedding_id || null,
+        image_url: state.imageUrl,
+        points: points.map(p => ({ x: p.x, y: p.y, label: p.positive ? 1 : 0 })),
+        bboxes: bboxes
+      };
+
+      const out = await postJSON(SAM2.apiBase + '/decode', payload);
+
+      // Expect server to return:
+      // { mask_w, mask_h, mask_b64, score }
+      mask = {
+        maskW: out.mask_w,
+        maskH: out.mask_h,
+        maskData: b64ToU8(out.mask_b64),
+        score: out.score ?? 0.0
+      };
+
+      setSamStatus('ready','Mask ready');
+    }
+
+    if(mask){
+      r.sam2_mask = mask;
+      renderOverlay();
+      renderRegions();
+      showToast(`Segmented: score ${mask.score.toFixed(3)}`);
+    } else {
+      showToast('No mask predicted');
+    }
+  }catch(e){
+    showToast('Segment failed: ' + e.message);
+    console.error(e);
+  }finally{
+    $('segment-btn').disabled = false;
+    $('segment-btn').textContent = '⚡ Segment Region';
+  }
+}
+// ═══════════════════════════════════════════════════════════════════════
+// REGIONS PANEL
+// ═══════════════════════════════════════════════════════════════════════
+function renderRegions(){if(state.sidePanel!=='regions')return;const c=$('panel-content'),k=`${state.templateGroupKey}__${state.viewKey}`,t=ALL_TEMPLATES[k];
+c.innerHTML=state.regions.map((r,i)=>{const act=state.activeRegion===r.id,exp=state.expandedRegion===r.id,cnt=(r.annotations?.length||0)+(r.sam2_mask?1:0);
+let h=`<div class="region-item${act?' active':''}" data-region="${r.id}"><div class="region-color" style="background:${r.color}"></div><div style="flex:1;min-width:0"><div class="region-label">${i+1}. ${r.label}</div><div class="region-ontology">${r.ontology}</div></div>${cnt>0?`<span class="region-badge">${cnt}</span>`:''}</div>`;
+if(exp){h+=`<div class="attr-editor">`;if(t?.attributes)Object.entries(t.attributes).forEach(([an,opts])=>{h+=`<div class="attr-label">${an}</div><select class="attr-select" data-region="${r.id}" data-attr="${an}"><option value="">—</option>${opts.map(o=>`<option value="${o}"${r.attributes?.[an]===o?' selected':''}>${o}</option>`).join('')}</select>`});
+h+=`<textarea class="attr-notes" data-region="${r.id}" placeholder="Notes...">${r.notes||''}</textarea>`;if(cnt>0)h+=`<button class="clear-btn" data-clear="${r.id}">Clear All</button>`;h+=`</div>`}return h}).join('');
+c.querySelectorAll('.region-item').forEach(el=>el.addEventListener('click',()=>{const rid=el.dataset.region;state.activeRegion=rid;state.expandedRegion=state.expandedRegion===rid?null:rid;renderRegions();updateStatus()}));
+c.querySelectorAll('.attr-select').forEach(el=>el.addEventListener('change',()=>{const r=state.regions.find(r=>r.id===el.dataset.region);if(r)r.attributes[el.dataset.attr]=el.value}));
+c.querySelectorAll('.attr-notes').forEach(el=>el.addEventListener('input',()=>{const r=state.regions.find(r=>r.id===el.dataset.region);if(r)r.notes=el.value}));
+c.querySelectorAll('.clear-btn').forEach(el=>el.addEventListener('click',e=>{e.stopPropagation();saveUndo();const r=state.regions.find(r=>r.id===el.dataset.clear);if(r){r.annotations=[];r.attributes={};r.notes='';r.sam2_mask=null;renderRegions();renderOverlay();updateStatus()}}))}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EXPORT
+// ═══════════════════════════════════════════════════════════════════════
+function renderExport(){if(state.sidePanel!=='export')return;const ann=state.regions.filter(r=>r.annotations?.length>0||r.sam2_mask||(r.attributes&&Object.values(r.attributes).some(v=>v))).length;
+$('panel-content').innerHTML=`<div class="panel-label">Export</div><div style="color:var(--text-muted);font-size:11px;margin-bottom:8px">${ann}/${state.regions.length} regions annotated</div><div style="color:var(--text-light);font-size:9px;margin-bottom:8px;word-break:break-all">URI: ${state.annotationURI}</div><button class="export-btn primary" id="exp-json">📥 Darwin Core JSON</button><button class="export-btn primary" id="exp-coco">📥 COCO JSON</button><button class="export-btn secondary" id="exp-csv">📊 Traits CSV</button>`;
+$('exp-json').addEventListener('click',exportDwC);$('exp-csv').addEventListener('click',exportCSV);$('exp-coco').addEventListener('click',exportCOCO)}
+function exportDwC(){const meas=[];state.regions.forEach(r=>{if(r.attributes)Object.entries(r.attributes).forEach(([a,v])=>{if(v)meas.push({measurementType:`${r.label}:${a}`,measurementValue:v,measurementMethod:'Descriptron Web Annotator'})})});const anns={};state.regions.forEach(r=>{if(r.annotations?.length||r.sam2_mask||Object.values(r.attributes||{}).some(v=>v))anns[r.id]={label:r.label,ontology:r.ontology,color:r.color,annotations:r.annotations,sam2_mask:r.sam2_mask?{score:r.sam2_mask.score}:null,attributes:r.attributes||{},notes:r.notes||''}});
+const data={meta:{format:'Descriptron-DwC-Annotation',version:'1.1',timestamp:new Date().toISOString(),annotationURI:state.annotationURI,template:`${state.templateGroupKey}/${state.viewKey}`},occurrence:{occurrenceID:state.occurrenceData?.occurrenceID||'',scientificName:state.occurrenceData?.scientificName||'',family:state.occurrenceData?.family||'',order:state.occurrenceData?.order||'',class:state.occurrenceData?.class||'',institutionCode:state.occurrenceData?.institutionCode||'',imageURL:state.occurrenceData?.imageURL||''},measurements:meas,annotations:anns};
+dl(JSON.stringify(data,null,2),'application/json',`descriptron_${(state.occurrenceData?.scientificName||'specimen').replace(/[^a-zA-Z0-9]/g,'_')}_${state.occurrenceData?.occurrenceID||'unknown'}.json`)}
+function exportCSV(){const rows=[['annotationURI','occurrenceID','scientificName','region','ontologyID','attribute','value','notes']];state.regions.forEach(r=>{if(r.attributes)Object.entries(r.attributes).forEach(([a,v])=>{if(v)rows.push([state.annotationURI,state.occurrenceData?.occurrenceID||'',state.occurrenceData?.scientificName||'',r.label,r.ontology,a,v,r.notes||''])})});dl(rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n'),'text/csv',`descriptron_traits_${state.occurrenceData?.occurrenceID||'unknown'}.csv`)}
+function exportCOCO(){
+  const images=[{id:1,file_name:state.occurrenceData?.imageURL||state.imageUrl,width:state.imgDims.w,height:state.imgDims.h,gbif_occurrence_id:state.occurrenceData?.occurrenceID||''}];
+  const cats=state.regions.map((r,i)=>({id:i+1,name:r.id,label:r.label,ontology:r.ontology}));
+  const anns=[];let aid=1;
+  state.regions.forEach((r,ri)=>{
+    r.annotations?.filter(a=>a.type==='bbox').forEach(a=>{
+      anns.push({id:aid++,image_id:1,category_id:ri+1,bbox:[a.x,a.y,a.w,a.h],area:a.w*a.h,iscrowd:0});
+    });
+    if(r.sam2_mask&&r.sam2_mask.maskData){
+      const rle=maskToRLE(r.sam2_mask.maskData,r.sam2_mask.maskW,r.sam2_mask.maskH);
+      anns.push({id:aid++,image_id:1,category_id:ri+1,segmentation:{counts:rle.counts,size:rle.size},area:Array.from(r.sam2_mask.maskData).reduce((s,v)=>s+v,0),iscrowd:0,score:r.sam2_mask.score});
+    }
+    const kpts=(r.annotations||[]).filter(a=>a.type==='keypoint').sort((a,b)=>a.number-b.number);
+    if(kpts.length>0){
+      const ka=[];const kn=[];
+      kpts.forEach(k=>{ka.push(Math.round(k.x),Math.round(k.y),2);kn.push('kpt_'+k.number)});
+      anns.push({id:aid++,image_id:1,category_id:ri+1,keypoints:ka,num_keypoints:kpts.length,keypoint_names:kn,iscrowd:0});
+    }
+  });
+  dl(JSON.stringify({info:{description:'Descriptron GBIF Annotation',version:'2.0',annotation_uri:state.annotationURI},images,categories:cats,annotations:anns},null,2),'application/json',`descriptron_coco_${state.occurrenceData?.occurrenceID||'unknown'}.json`);
+}
+function rleToMask(rle){
+  const h=rle.size[0],w=rle.size[1];
+  const mask=new Uint8Array(h*w);
+  let idx=0,val=0;
+  for(let c=0;c<rle.counts.length;c++){
+    const run=rle.counts[c];
+    for(let i=0;i<run;i++){
+      if(val===1){const x=Math.floor(idx/h),y=idx%h;if(y<h&&x<w)mask[y*w+x]=1}
+      idx++;
+    }
+    val=1-val;
+  }
+  return{maskData:mask,maskW:w,maskH:h};
+}
+
+// COCO JSON IMPORT
+// ═══════════════════════════════════════════════════════════════════════
+function importCOCO(json){
+  try{
+    const data=JSON.parse(json);
+    if(data.annotations&&data.categories){
+      if(data.images&&data.images[0]){
+        const img=data.images[0];
+        if(img.file_name&&img.file_name.startsWith('http')&&!state.imgLoaded){loadImage(img.file_name)}
+        if(img.gbif_occurrence_id){
+          state.occurrenceData=state.occurrenceData||{};
+          state.occurrenceData.occurrenceID=img.gbif_occurrence_id;
+          state.occurrenceData.imageURL=img.file_name;
+        }
+      }
+      let imported=0;
+      data.categories.forEach(cat=>{
+        const r=state.regions.find(r=>r.id===cat.name||r.label===cat.label||r.label===cat.name);
+        if(!r)return;
+        data.annotations.filter(a=>a.category_id===cat.id).forEach(a=>{
+          if(a.bbox&&a.bbox.length===4){r.annotations.push({type:'bbox',x:a.bbox[0],y:a.bbox[1],w:a.bbox[2],h:a.bbox[3]});imported++}
+          if(a.segmentation&&a.segmentation.counts&&a.segmentation.size){
+            const dec=rleToMask(a.segmentation);
+            r.sam2_mask={maskData:dec.maskData,maskW:dec.maskW,maskH:dec.maskH,score:a.score||0};
+            imported++;
+          }
+          if(a.keypoints&&a.keypoints.length>=3){
+            for(let i=0;i<a.keypoints.length;i+=3){
+              if(a.keypoints[i+2]>0){
+                r.annotations.push({type:'keypoint',x:a.keypoints[i],y:a.keypoints[i+1],number:Math.floor(i/3)+1});
+                imported++;
+              }
+            }
+          }
+        });
+      });
+      renderOverlay();renderRegions();updateStatus();
+      showToast('Imported '+imported+' annotations');
+    }
+    else if(data.annotations&&data.meta&&data.meta.format&&data.meta.format.indexOf('Descriptron')>=0){
+      const keys=Object.keys(data.annotations);
+      for(let k=0;k<keys.length;k++){
+        const rid=keys[k],ann=data.annotations[rid];
+        const r=state.regions.find(function(r){return r.id===rid});
+        if(r){if(ann.annotations)r.annotations=ann.annotations;if(ann.attributes)r.attributes=ann.attributes;if(ann.notes)r.notes=ann.notes}
+      }
+      renderOverlay();renderRegions();updateStatus();
+      showToast('Imported Descriptron annotations');
+    }
+    else showToast('Unrecognized JSON format');
+  }catch(e){showToast('Invalid JSON: '+e.message)}
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// STATUS
+// ═══════════════════════════════════════════════════════════════════════
+function updateStatus(){const ar=state.regions.find(r=>r.id===state.activeRegion);$('status-region').textContent=ar?.label||'none';$('status-region').style.color=ar?.color||'var(--text-light)';const ann=state.regions.filter(r=>r.annotations?.length>0||r.sam2_mask).length;$('status-progress').textContent=`${ann}/${state.regions.length}`}
+function switchPanel(tab){state.sidePanel=tab;document.querySelectorAll('.panel-tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));if(tab==='regions')renderRegions();else renderExport()}
+
+// ═══════════════════════════════════════════════════════════════════════
+// KEYBOARD
+// ═══════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();return}if((e.ctrlKey||e.metaKey)&&e.key==='y'){e.preventDefault();redo();return}if(e.key==='s'||e.key==='S'){e.preventDefault();runSegment();return}const sc={b:'bbox',p:'point',d:'brush',e:'eraser',k:'keypoint'};if(sc[e.key]){setTool(sc[e.key]);e.preventDefault()}const n=parseInt(e.key);if(n>=1&&n<=state.regions.length){state.activeRegion=state.regions[n-1].id;state.expandedRegion=state.regions[n-1].id;renderRegions();updateStatus();e.preventDefault()}});
+window.addEventListener('resize',()=>{if(state.imgLoaded)drawImage()});
+
+// ═══════════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+  initTools();initTemplateSelect();loadTemplate();
+  SAM2.init();
+  $('search-btn').addEventListener('click',searchGBIF);
+  $('search-input').addEventListener('keydown',e=>{if(e.key==='Enter')searchGBIF()});
+  $('url-btn').addEventListener('click',()=>{const u=$('url-input').value.trim();if(u)loadImage(u)});
+  $('url-input').addEventListener('keydown',e=>{if(e.key==='Enter'){const u=$('url-input').value.trim();if(u)loadImage(u)}});
+  const oc=$('overlay-canvas');oc.addEventListener('mousedown',onMouseDown);oc.addEventListener('mousemove',onMouseMove);oc.addEventListener('mouseup',onMouseUp);oc.addEventListener('contextmenu',e=>{e.preventDefault();onMouseDown(e)});
+  $('brush-slider').addEventListener('input',e=>{state.brushSize=parseInt(e.target.value);$('brush-size-label').textContent=state.brushSize});
+  $('tab-regions').addEventListener('click',()=>switchPanel('regions'));
+  $('tab-export').addEventListener('click',()=>switchPanel('export'));
+  $('segment-btn').addEventListener('click',runSegment);
+  $('coco-import').addEventListener('change',e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>importCOCO(ev.target.result);r.readAsText(f)}});
+  oc.style.cursor='crosshair';updateStatus();
+});
+</script>
+</body>
+</html>
