@@ -6,8 +6,9 @@ authors:
   - family-names: "Van Dam"
     given-names: "Alex"
 # optional but recommended
-# orcid: "https://orcid.org/0000-0002-1966-0338"
+orcid: "https://orcid.org/0000-0002-1966-0338"
 repository-code: "https://github.com/alexrvandam/Descriptron-GBIF_Annotator"
 url: "https://www.descriptrongbifannotator.org"
 license: "Apache-2.0"
-version: "1.0.0"
+version: "1.0.1"
+doi: "10.5281/zenodo.18888578"
