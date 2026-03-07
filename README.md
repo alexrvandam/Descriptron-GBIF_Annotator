@@ -51,6 +51,19 @@ You can run the frontend without Docker, but some browser features (fetch/CORS) 
 python3 -m http.server 8000
 
 ```
+<div style="max-width: 800px; margin: 0 auto;">
+  <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden;">
+    <iframe
+      src="https://www.youtube.com/watch?v=D9C9fcGsaA0&t=5s"
+      title="YouTube video player"
+      style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
+      frameborder="0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allowfullscreen>
+    </iframe>
+  </div>
+</div>
+
 if you use the website or github or find it useful please cite it,
 
 Van Dam, A. Descriptron-GBIF Annotator (Version 1.0.1) [Computer software]. https://github.com/alexrvandam/Descriptron-GBIF_Annotator. doi: https://doi.org/10.5281/zenodo.18888578
