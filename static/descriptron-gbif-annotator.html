@@ -304,7 +304,7 @@
       <div class="login-popup" id="login-popup">
         <div style="display:flex;gap:4px;margin-bottom:8px">
           <button id="oauth-gbif" style="flex:1;padding:6px;background:#509e2f;color:white;border:none;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;font-family:inherit" title="Sign in with your GBIF account">🌿 GBIF</button>
-          <button id="oauth-inat" style="flex:1;padding:6px;background:#74ac00;color:white;border:none;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;font-family:inherit" title="Sign in with your iNaturalist account">🦋 iNaturalist</button>
+          <button id="oauth-inat" onclick="event.preventDefault(); event.stopPropagation(); loginWithInaturalist();" style="flex:1;padding:6px;background:#74ac00;color:white;border:none;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;font-family:inherit" title="Sign in with your iNaturalist account">🦋 iNaturalist</button>
         </div>
         <div style="text-align:center;color:var(--text-light);font-size:9px;margin-bottom:6px">— or enter manually —</div>
         <label>Annotator Name</label>
@@ -502,51 +502,1221 @@
   </div>
 </div>
 <script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// iNATURALIST OAUTH LOGIN (PKCE FLOW)
+// ═══════════════════════════════════════════════════════════════════════════════
+const INAT_CLIENT_ID = 'gz_zrvHCbM2qH7nCudARxrH5sqja-BrjyndEKuokTUo';
+const INAT_REDIRECT_URI = 'https://www.descriptrongbifannotator.org/';
+
+// 1. PKCE Helpers for secure browser-based authentication
+async function generateCodeChallenge(verifier) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const digest = await window.crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function generateRandomString(length) {
+  const array = new Uint8Array(length);
+  window.crypto.getRandomValues(array);
+  return Array.from(array, dec => dec.toString(16).padStart(2, '0')).join('');
+}
+
+// 2. The Login function
+async function loginWithInaturalist() {
+  const verifier = generateRandomString(64);
+  localStorage.setItem('inat_code_verifier', verifier);
+  const challenge = await generateCodeChallenge(verifier);
+  const authUrl = `https://www.inaturalist.org/oauth/authorize?client_id=${INAT_CLIENT_ID}&redirect_uri=${encodeURIComponent(INAT_REDIRECT_URI)}&response_type=code&code_challenge=${challenge}&code_challenge_method=S256`;
+  window.location.href = authUrl;
+}
+
+// 3. The Callback handler (runs on page load)
+async function handleInatCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return;
+
+  // Clean the URL immediately
+  window.history.replaceState({}, document.title, window.location.pathname);
+  const verifier = localStorage.getItem('inat_code_verifier');
+  
+  try {
+    const res = await fetch('https://www.inaturalist.org/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: INAT_CLIENT_ID,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: INAT_REDIRECT_URI,
+        code_verifier: verifier
+      })
+    });
+    const data = await res.json();
+    if (data.access_token) {
+      const userRes = await fetch('https://www.inaturalist.org/users/edit.json', {
+        headers: { 'Authorization': `Bearer ${data.access_token}` }
+      });
+      const userData = await userRes.json();
+      localStorage.setItem('inat_user', JSON.stringify({ login: userData.login, id: userData.id, name: userData.name || '' }));
+      updateInatUI(userData.login);
+      // Sync iNat user into annotator object so exports include it
+      annotator.name = annotator.name || userData.name || userData.login;
+      annotator.inat_login = userData.login;
+      annotator.inat_id = userData.id;
+      annotator.provider = 'iNaturalist';
+      saveAnnotator();
+    }
+  } catch (err) { console.error("iNat Auth Error:", err); }
+}
+
+function updateInatUI(username) {
+  const btn = document.getElementById('oauth-inat');
+  if (btn) {
+    btn.innerHTML = `🦋 ${username}`;
+    btn.style.background = "#509e2f"; // Change to GBIF green to show success
+    btn.title = `Logged in as ${username}`;
+  }
+}
+
+// 4. Initialize Auth listeners
+window.addEventListener('DOMContentLoaded', () => {
+  const inatBtn = document.getElementById('oauth-inat');
+  if (inatBtn) inatBtn.onclick = loginWithInaturalist;
+  
+  handleInatCallback();
+  
+  const savedUser = localStorage.getItem('inat_user');
+  if (savedUser) {
+    const inatData = JSON.parse(savedUser);
+    updateInatUI(inatData.login);
+    // Sync to annotator object if not already set from manual entry
+    if (!annotator.inat_login) {
+      annotator.inat_login = inatData.login;
+      annotator.inat_id = inatData.id;
+      annotator.provider = annotator.provider || 'iNaturalist';
+      if (!annotator.name) annotator.name = inatData.name || inatData.login;
+      try { localStorage.setItem('descriptron_annotator', JSON.stringify(annotator)); } catch(e) {}
+      updateLoginUI();
+    }
+  }
+});
 // ═══════════════════════════════════════════════════════════════════════
 // COLORS & ATTRIBUTES
 // ═══════════════════════════════════════════════════════════════════════
 const COLORS=["#e53935","#f9a825","#43a047","#1e88e5","#8e24aa","#d81b60","#00acc1","#fb8c00","#7cb342","#26a69a","#5c6bc0","#ab47bc","#039be5","#c0ca33","#66bb6a","#7e57c2","#c62828","#00838f","#558b2f","#6a1b9a"];
 function c(i){return COLORS[i%COLORS.length]}
-const ATTR={
-  texture:["smooth","rugose","striate","punctate","areolate","reticulate","granulate","coriaceous","alutaceous","shagreened","imbricate","tuberculate","verrucose","foveate"],
-  sculpture:["carinae","costulae","costae","foveae","sulci","rugae","striae","none"],
-  setae:["absent","sparse","dense","appressed","erect","suberect","decumbent","plumose","scale-like","spatulate","simple","branched"],
-  color:["black","dark brown","brown","light brown","tan","gray","dark gray","white","cream","yellow","orange","red","pink","green","olive","blue","ferruginous","testaceous","piceous","castaneous","flavous","ochraceous","silver","gold","metallic green","metallic blue","metallic copper"],
-  color_pattern:["uniform","bicolored","tricolored","mottled","spotted","striped","banded","maculate","vittate","fasciate"],
-  shape:["convex","flat","concave","angular","rounded","emarginate","truncate","acuminate","acute","obtuse"],
-  margin:["entire","crenulate","serrate","dentate","sinuate","carinate","lamellate"],
-  surface_covering:["bare","pruinose","tomentose","sericeous","pubescent","pilose","villous","lanate","setose"],
-  plant_color:["green","dark green","light green","yellow-green","yellow","orange","red","purple","brown","white","cream","variegated","glaucous"],
-  plant_texture:["glabrous","pubescent","tomentose","hirsute","villous","scabrous","glandular","waxy","glossy","matte","papillate","rugose"],
-  plant_shape:["ovate","lanceolate","oblong","elliptic","linear","cordate","orbicular","spatulate","obovate","deltoid","reniform","hastate","sagittate","palmate","pinnate"],
-  petal_shape:["entire","lobed","fringed","tubular","bilabiate","papilionate","cruciform","rotate","campanulate","funnel-shaped","salverform"],
-  leaf_margin:["entire","serrate","dentate","crenate","lobed","sinuate","undulate","ciliate","revolute"],
-  shell_shape:["globose","turbinate","conical","discoidal","fusiform","patelliform","trochiform","auriform","biconical","planorboid"],
-  shell_sculpture:["smooth","ribbed","striate","cancellate","nodulose","spinose","lamellate","decussate","pustulate","granulate"],
-  scale_type:["cycloid","ctenoid","ganoid","placoid","cosmoid","absent"],
-  reptile_scale_type:["smooth","keeled","granular","tuberculate","imbricate","juxtaposed","mucronate","scute","osteoderm","heterogeneous"],
-  feather_type:["contour","down","semiplume","filoplume","bristle","powder down"],
-  plumage:["uniform","streaked","barred","spotted","mottled","iridescent","metallic","cryptic","dimorphic"],
-  skin_texture:["smooth","granular","tuberculate","keeled","spiny","plated","scaled","warty","slimy","dry"],
-  horn_type:["absent","single","paired","branched","spiraled","recurved","ringed","smooth"],
-  cap_shape:["convex","flat","umbonate","campanulate","conical","depressed","infundibuliform","ovoid","hemispherical","irregular"],
-  cap_surface:["smooth","fibrillose","squamose","viscid","dry","areolate","rimose","pruinose","tomentose","glabrous","hygrophanous"],
-  gill_attachment:["free","adnate","adnexed","decurrent","sinuate","subdecurrent","emarginate"],
-  spore_print:["white","cream","yellow","pink","brown","dark brown","black","rust","olive","purple-brown"],
-  hymenium:["gills","pores","teeth","smooth","ridged","wrinkled","veined"],
-  stipe_surface:["smooth","fibrillose","scaly","reticulate","pruinose","glandular-dotted","striate"],
-  thallus_type:["crustose","foliose","fruticose","squamulose","leprose","filamentous","gelatinous","dimorphic"],
-  thallus_surface:["smooth","rough","pruinose","sorediate","isidiate","lobulate","papillate","areolate","cracked"],
-  leaf_arrangement:["distichous","spiral","complanate","julaceous","squarrose","secund","imbricate","spreading","appressed","falcate"],
-  bryophyte_habit:["acrocarpous","pleurocarpous","thalloid","thallose","dendroid","pendant","cushion","mat","turf","weft"],
-  capsule_shape:["cylindrical","ovoid","pyriform","globose","urceolate","arcuate","pendulous","erect","inclined","cernuous"],
-  peristome_type:["absent","single","double","nematodontous","arthrodontous","diplolepidous","haplolepidous"],
-  body_symmetry:["bilateral","radial","asymmetric","elongate","ovate","lanceolate","ribbon-like","leaf-shaped"],
-  pharynx_type:["simple","bulbous","plicate","variable","rhabdocoel","triclad","polyclad"],
-  eye_pattern:["absent","two","multiple_paired","clustered","marginal","tentacular","cerebral","inverse_cup"],
-  flatworm_color:["translucent","white","cream","brown","black","orange","red","yellow","green","striped","spotted","banded","mottled","iridescent"],
-  flatworm_margin:["smooth","ruffled","undulate","crenulate","papillate","tentaculate","pseudotentaculate"]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DESCRIPTRON ROSETTA v1.0 — Expanded Morphological Attribute Vocabulary
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Drop-in replacement for the ATTR block in descriptron-gbif-annotator.html
+// and importable into descriptron-label-256-video-v58.py via ontology manager.
+//
+// Sources:
+//   HAO  — Hymenoptera Anatomy Ontology (Yoder et al. 2010; 2,111 concepts)
+//   UBERON — Uber Anatomy Ontology (cross-species)
+//   AISM — Anatomical Insect Skeleto-Muscular ontology (Girón et al. 2023)
+//   COLAO — Coleoptera Anatomy Ontology (Girón et al. 2023b)
+//   PATO — Phenotype And Trait Ontology
+//   PO   — Plant Ontology
+//   Phenoscript — Tarasov et al. 2023; Montanaro & Tarasov 2024
+//   SUF  — Semantic Units Framework (Vogt et al. 2025)
+//
+// Architecture:
+//   Each attribute category has:
+//     - values[]        : the controlled vocabulary terms
+//     - ontology_map{}  : term → ontology CURIE (where available)
+//     - source          : provenance string
+//     - description     : human-readable category description
+//     - extensible      : boolean, whether user/RAG can add new terms at runtime
+//
+// Usage:
+//   Replace `const ATTR = { ... }` in descriptron-gbif-annotator.html with:
+//     const ATTR = ROSETTA.toSimpleATTR();
+//   Or use the full ROSETTA object for ontology-aware operations.
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ROSETTA = {
+  version: "1.0.0",
+  build_date: "2026-04-14",
+  sources: [
+    { prefix: "HAO",    name: "Hymenoptera Anatomy Ontology",   url: "http://purl.obolibrary.org/obo/HAO_", ref: "Yoder et al. 2010" },
+    { prefix: "UBERON", name: "Uber Anatomy Ontology",          url: "http://purl.obolibrary.org/obo/UBERON_", ref: "Mungall et al. 2012" },
+    { prefix: "AISM",   name: "Insect Skeleto-Muscular Ontology", url: "http://purl.obolibrary.org/obo/AISM_", ref: "Girón et al. 2023" },
+    { prefix: "COLAO",  name: "Coleoptera Anatomy Ontology",    url: "http://purl.obolibrary.org/obo/COLAO_", ref: "Girón et al. 2023b" },
+    { prefix: "PATO",   name: "Phenotype And Trait Ontology",   url: "http://purl.obolibrary.org/obo/PATO_", ref: "Gkoutos et al. 2005" },
+    { prefix: "PO",     name: "Plant Ontology",                 url: "http://purl.obolibrary.org/obo/PO_", ref: "Cooper et al. 2013" },
+    { prefix: "PHENOSCRIPT", name: "Phenoscript Language",      url: "https://github.com/sergeitarasov/PhenoScript", ref: "Montanaro & Tarasov 2024" },
+    { prefix: "SUF",    name: "Semantic Units Framework",       url: "https://doi.org/10.1038/s41597-025-04567-y", ref: "Vogt et al. 2025" },
+  ],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CUTICULAR SURFACE FEATURES (arthropod-wide)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  texture: {
+    description: "Surface microsculpture/microstructure of the cuticle",
+    source: "HAO/AISM/COLAO + taxonomic literature",
+    extensible: true,
+    values: [
+      // === Original Descriptron terms ===
+      "smooth", "rugose", "striate", "punctate", "areolate", "reticulate",
+      "granulate", "coriaceous", "alutaceous", "shagreened", "imbricate",
+      "tuberculate", "verrucose", "foveate",
+      // === Expanded from AISM MoDCAS cuticle model (Girón et al. 2023) ===
+      "aciculate",        // fine needle-like scratches
+      "colliculate",      // small rounded elevations
+      "fenestrate",       // with window-like openings
+      "lacunose",         // pitted with irregular depressions
+      "lineolate",        // fine parallel lines
+      "malleate",         // hammered appearance
+      "microstriate",     // microscopically striate
+      "papillate",        // with small nipple-like projections
+      "scabriculous",     // minutely roughened
+      "vermiculate",      // with worm-like ridges
+      // === Additional from Coleoptera/Hymenoptera descriptive literature ===
+      "asperate",         // rough with small hard elevations
+      "cancellate",       // cross-hatched / latticed
+      "clathrate",        // lattice-like openings
+      "coronate",         // with crown-like ridges
+      "costulate",        // with fine longitudinal ridges
+      "crenulate-punctate", // combined microsculpture
+      "favose",           // honeycomb-like
+      "gemmulate",        // with bud-like projections
+      "granulose-rugose", // combined microsculpture
+      "lirate",           // with fine ridges
+      "porulate",         // with minute pores
+      "rimose",           // cracked/fissured
+      "rugulose",         // finely rugose
+      "scrobiculate",     // with small shallow pits
+      "tessellate",       // mosaic-like pattern
+      "umbilicate",       // with central depression in elevations
+    ],
+    ontology_map: {
+      "smooth":     "PATO:0000701",
+      "rugose":     "PATO:0001370",
+      "striate":    "PATO:0001410",
+      "punctate":   "PATO:0001379",
+      "reticulate": "PATO:0001384",
+      "granulate":  "PATO:0001366",
+      "tuberculate":"PATO:0001413",
+      "foveate":    "AISM:0000094",   // AISM cuticle depression
+      "areolate":   "AISM:0000095",   // AISM cuticle pattern
+      "papillate":  "PATO:0001375",
+      "verrucose":  "PATO:0001417",
+      "imbricate":  "PATO:0002007",
+      "fenestrate": "AISM:0000096",
+      "cancellate": "PATO:0001352",
+    }
+  },
+
+  sculpture: {
+    description: "Raised or depressed structural features on the cuticle",
+    source: "AISM MoDCAS model — cuticular protrusions & depressions",
+    extensible: true,
+    values: [
+      // === Original ===
+      "carinae", "costulae", "costae", "foveae", "sulci", "rugae", "striae", "none",
+      // === Expanded: AISM cuticular protrusions (Fig. 2, Girón et al. 2023) ===
+      "callosities",      // thickened elevated areas
+      "calli",            // localized callosities
+      "denticles",        // small tooth-like projections
+      "gibbosities",      // rounded swellings
+      "lamellae",         // thin plate-like projections
+      "nodules",          // small rounded knobs
+      "spines",           // rigid pointed projections (not setae — no socket)
+      "teeth",            // larger tooth-like projections
+      "tubercles",        // rounded elevated knobs
+      "tumuli",           // broad rounded swellings
+      // === AISM cuticular depressions ===
+      "fossae",           // broad pits
+      "grooves",          // elongate depressions
+      "impressions",      // shallow depressions
+      "notuli",           // small notches
+      "punctures",        // deep round pits
+      "scrobe",           // groove for antenna reception (HAO:0000911)
+      // === Combination patterns (common in Formicidae) ===
+      "carinulae",        // fine carinae
+      "costulae-foveae",  // combined sculpture
+      "rugulae",          // fine rugae
+      "rugulae-punctate", // combined rugulae + punctures
+      "longitudinal-rugae",
+      "transverse-rugae",
+      "concentric-rugae",
+      "reticulate-rugae",
+    ],
+    ontology_map: {
+      "carinae":     "HAO:0000188",  // carina
+      "foveae":      "AISM:0000094",
+      "sulci":       "HAO:0000952",  // sulcus
+      "scrobe":      "HAO:0000911",  // antennal scrobe
+      "spines":      "AISM:0000060", // cuticular protrusion, no socket
+      "denticles":   "HAO:0000244",
+      "lamellae":    "AISM:0000065",
+      "teeth":       "HAO:0001019",  // tooth
+      "tubercles":   "HAO:0001047",  // tubercle
+      "grooves":     "AISM:0000092",
+      "fossae":      "AISM:0000091",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SETAE — comprehensive seta morphotype vocabulary
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  setae: {
+    description: "Cuticular hair-like structures arising from sockets (trichoid sensilla and derivatives)",
+    source: "HAO/AISM seta hierarchy + taxonomic literature (Bolton 1994; Boudinot 2015)",
+    extensible: true,
+    values: [
+      // === Original ===
+      "absent", "sparse", "dense", "appressed", "erect", "suberect",
+      "decumbent", "plumose", "scale-like", "spatulate", "simple", "branched",
+      // === Seta morphotypes (AISM seta subtypes) ===
+      "palmate",          // ** the requested addition ** — fan-shaped branching
+      "clavate",          // club-shaped, thickened distally
+      "capitate",         // with knob-shaped tip
+      "bifurcate",        // forked/split into two
+      "trifurcate",       // split into three
+      "multifurcate",     // split into many branches
+      "pennate",          // feather-like, branches along shaft
+      "stellate",         // star-shaped radiating branches
+      "squamiform",       // scale-shaped (finer distinction than scale-like)
+      "lanceolate",       // lance/spear-shaped
+      "filiform",         // thread-like, uniform diameter
+      "acuminate",        // gradually tapering to sharp point
+      "truncate",         // blunt-tipped/cut off
+      "hooked",           // with apical hook/curve
+      "serrate",          // with saw-tooth edges
+      "barbed",           // with backward-pointing barbs
+      "pectinate",        // comb-like branches on one side
+      "dendritic",        // tree-like branching
+      "glandular",        // tipped with secretory cell/droplet
+      "sensilliform",     // sensory, peg-like (sensillum basiconicum)
+      // === Density/distribution qualifiers ===
+      "scattered",        // irregularly distributed, sparse
+      "uniform",          // evenly distributed
+      "fasciculate",      // in tufts/bundles
+      "tufted",           // grouped in distinct clusters
+      "fringed",          // forming a fringe along margin
+      "whorl",            // arranged in a ring
+      // === Orientation qualifiers ===
+      "proclinate",       // leaning forward
+      "reclinate",        // leaning backward
+      "inclined",         // at intermediate angle
+      "prostrate",        // lying flat against surface
+      "subdecumbent",     // slightly raised from surface
+      // === Length/size qualifiers ===
+      "microsetae",       // very short, barely visible
+      "macrosetae",       // distinctly longer than surrounding
+      "megasetae",        // exceptionally long
+    ],
+    ontology_map: {
+      "absent":       "PATO:0000462",
+      "simple":       "AISM:0000070",  // seta (basic type)
+      "plumose":      "AISM:0000071",  // plumose seta
+      "branched":     "AISM:0000072",  // branched seta
+      "palmate":      "AISM:0000073",  // palmate seta (candidate — verify against AISM release)
+      "scale-like":   "AISM:0000074",  // squamiform seta
+      "spatulate":    "AISM:0000075",  // spatulate seta
+      "clavate":      "AISM:0000076",  // clavate seta
+      "glandular":    "AISM:0000077",  // glandular seta
+      "pectinate":    "AISM:0000078",  // pectinate seta
+      "pennate":      "AISM:0000079",  // pennate seta
+      "erect":        "PATO:0001546",
+      "appressed":    "PATO:0001925",
+      "dense":        "PATO:0001162",
+      "sparse":       "PATO:0001152",
+      "filiform":     "PATO:0001406",
+    }
+  },
+
+  // === Surface covering (pilosity/vestiture) ===
+  surface_covering: {
+    description: "Overall vestiture/pubescence character of a surface",
+    source: "HAO/taxonomic literature",
+    extensible: true,
+    values: [
+      // === Original ===
+      "bare", "pruinose", "tomentose", "sericeous", "pubescent", "pilose",
+      "villous", "lanate", "setose",
+      // === Expanded ===
+      "arachnoid",        // cobweb-like covering
+      "canescent",        // gray-white fine pubescence
+      "ciliate",          // with marginal fringe of setae
+      "comose",           // with tuft at apex
+      "floccose",         // with woolly tufts
+      "glabrescent",      // becoming glabrous
+      "glabrous",         // completely hairless
+      "hispid",           // with stiff bristly setae
+      "hirsute",          // with long coarse setae
+      "lanuginose",       // woolly-downy
+      "pappose",          // with pappus-like setae
+      "scabrous",         // rough to touch from short setae
+      "strigose",         // with appressed stiff setae
+      "velutinous",       // velvety pile of short erect setae
+      "velvety",          // dense short uniform pile
+      "woolly",           // matted/tangled soft setae
+    ],
+    ontology_map: {
+      "glabrous":    "PATO:0000585",
+      "pubescent":   "PATO:0001377",
+      "setose":      "PATO:0001894",
+      "pilose":      "PATO:0001893",
+      "hispid":      "PATO:0001895",
+      "tomentose":   "PATO:0001412",
+      "sericeous":   "PATO:0001399",
+      "villous":     "PATO:0001418",
+      "pruinose":    "PATO:0001378",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COLOR
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  color: {
+    description: "Integument/cuticle/tissue coloration",
+    source: "Taxonomic literature conventions + PATO color quality terms",
+    extensible: true,
+    values: [
+      // === Original ===
+      "black", "dark brown", "brown", "light brown", "tan", "gray", "dark gray",
+      "white", "cream", "yellow", "orange", "red", "pink", "green", "olive",
+      "blue", "ferruginous", "testaceous", "piceous", "castaneous", "flavous",
+      "ochraceous", "silver", "gold", "metallic green", "metallic blue", "metallic copper",
+      // === Expanded: classical entomological color terms ===
+      "aeneous",          // brassy/bronze metallic
+      "atro-",            // prefix: dark- (e.g., atrobrown)
+      "brunneo-",         // prefix: brown-
+      "cerulean",         // sky blue
+      "cinereous",        // ash gray
+      "cupreous",         // copper-colored
+      "fuscous",          // dark smoky brown
+      "fulvous",          // dull yellowish-brown (tawny)
+      "hepatic",          // liver-colored
+      "infuscate",        // darkened, smoky
+      "lurid",            // dirty yellowish/pale
+      "luteous",          // deep/egg yellow
+      "melleous",         // honey-colored
+      "nigricans",        // blackish
+      "rufescent",        // becoming reddish
+      "rufo-",            // prefix: red/reddish-
+      "sanguineous",      // blood red
+      "stramineous",      // straw-colored
+      "subflavous",       // slightly yellowish
+      "testaceo-",        // prefix: brick-colored
+      "viridescent",      // becoming greenish
+      "vitreous",         // glassy/transparent
+      // === Metallic colors ===
+      "metallic purple",
+      "metallic bronze",
+      "metallic gold",
+      "metallic black",   // dark with metallic sheen
+      // === Transparency/translucency ===
+      "hyaline",          // transparent/glass-like
+      "translucent",      // semi-transparent
+      "opaque",           // not transparent
+      "milky",            // whitish translucent
+      "amber",            // yellowish translucent
+    ],
+    ontology_map: {
+      "black":   "PATO:0000951",
+      "white":   "PATO:0000323",
+      "red":     "PATO:0000322",
+      "yellow":  "PATO:0000324",
+      "green":   "PATO:0000320",
+      "blue":    "PATO:0000318",
+      "brown":   "PATO:0000952",
+      "orange":  "PATO:0000953",
+      "gray":    "PATO:0000950",
+      "pink":    "PATO:0000954",
+      "hyaline": "PATO:0001414",
+    }
+  },
+
+  color_pattern: {
+    description: "Spatial distribution of colors on a structure",
+    source: "Taxonomic literature + PATO",
+    extensible: true,
+    values: [
+      // === Original ===
+      "uniform", "bicolored", "tricolored", "mottled", "spotted", "striped",
+      "banded", "maculate", "vittate", "fasciate",
+      // === Expanded ===
+      "annulate",         // with ring-like color bands
+      "apically-darkened",// darker at tip
+      "basally-darkened", // darker at base
+      "checkered",        // with alternating squares
+      "clouded",          // with vague darker patches
+      "fenestrate",       // with window-like transparent areas
+      "fumose",           // smoky darkened areas
+      "gradated",         // gradual color transition
+      "infumate",         // smokily darkened
+      "lineate",          // with colored lines
+      "marbled",          // with swirling color patterns
+      "nebulous",         // vague cloudy markings
+      "ocellate",         // with eye-like spots
+      "reticular-marked", // with net-like color pattern
+      "suffused",         // washed with another color
+      "variegated",       // irregularly multi-colored
+      "zonulate",         // with fine color zones
+    ],
+    ontology_map: {
+      "uniform":     "PATO:0000587",
+      "spotted":     "PATO:0000955",
+      "striped":     "PATO:0000957",
+      "banded":      "PATO:0000956",
+      "mottled":     "PATO:0001895",
+      "bicolored":   "PATO:0002091",
+      "variegated":  "PATO:0000958",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHAPE & STRUCTURAL GEOMETRY
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  shape: {
+    description: "Overall form/outline of a structure in cross-section or profile",
+    source: "PATO shape terms + taxonomic usage",
+    extensible: true,
+    values: [
+      // === Original ===
+      "convex", "flat", "concave", "angular", "rounded", "emarginate",
+      "truncate", "acuminate", "acute", "obtuse",
+      // === Expanded ===
+      "arcuate",          // bow-shaped, curved
+      "bilobed",          // with two lobes
+      "campanulate",      // bell-shaped
+      "clavate",          // club-shaped
+      "cordate",          // heart-shaped
+      "cuneate",          // wedge-shaped
+      "cyathiform",       // cup-shaped
+      "deltoid",          // triangular
+      "discoid",          // disc-shaped
+      "digitiform",       // finger-shaped
+      "elliptical",       // oval
+      "ensiform",         // sword-shaped
+      "falcate",          // sickle-shaped
+      "flabellate",       // fan-shaped
+      "fusiform",         // spindle-shaped
+      "globose",          // spherical
+      "infundibuliform",  // funnel-shaped
+      "lanceolate",       // lance-shaped
+      "linguiform",       // tongue-shaped
+      "navicular",        // boat-shaped
+      "obcordate",        // inversely heart-shaped
+      "obovate",          // inversely egg-shaped
+      "orbicular",        // circular
+      "ovoid",            // egg-shaped
+      "panduriform",      // fiddle-shaped
+      "pectinate",        // comb-shaped
+      "pedunculate",      // stalked
+      "pyriform",         // pear-shaped
+      "reniform",         // kidney-shaped
+      "rhomboidal",       // diamond-shaped
+      "rostrate",         // with a beak-like extension
+      "sagittate",        // arrow-shaped
+      "securiform",       // axe/hatchet-shaped
+      "sinuate",          // wavy
+      "spathulate",       // spoon-shaped
+      "subquadrate",      // approximately square
+      "subtriangular",    // approximately triangular
+      "trapezoidal",      // trapezoid-shaped
+      "triangular",       // three-sided
+      "tubular",          // tube-shaped
+      "turbinate",        // top-shaped
+      "uncinate",         // hook-shaped
+    ],
+    ontology_map: {
+      "convex":       "PATO:0001355",
+      "concave":      "PATO:0001854",
+      "flat":         "PATO:0000407",
+      "rounded":      "PATO:0001853",
+      "triangular":   "PATO:0002304",
+      "globose":      "PATO:0001400",
+      "ovoid":        "PATO:0001363",
+      "fusiform":     "PATO:0001891",
+      "clavate":      "PATO:0001853",
+      "falcate":      "PATO:0001856",
+      "lanceolate":   "PATO:0001891",
+      "reniform":     "PATO:0001389",
+      "cordate":      "PATO:0001857",
+      "truncate":     "PATO:0001858",
+      "emarginate":   "PATO:0001860",
+      "acuminate":    "PATO:0001859",
+    }
+  },
+
+  margin: {
+    description: "Edge/border character of a structure",
+    source: "HAO/AISM/taxonomic literature",
+    extensible: true,
+    values: [
+      // === Original ===
+      "entire", "crenulate", "serrate", "dentate", "sinuate", "carinate", "lamellate",
+      // === Expanded ===
+      "bidentate",        // with two teeth
+      "crenate",          // with rounded teeth
+      "denticulate",      // finely toothed
+      "doubly-serrate",   // with primary and secondary teeth
+      "erose",            // irregularly eroded-looking
+      "fimbriate",        // fringed
+      "incised",          // deeply and sharply cut
+      "lobate",           // with lobes
+      "multidentate",     // with many teeth
+      "mucronate",        // with short sharp point
+      "scalloped",        // with rounded projections
+      "serrulate",        // finely serrate
+      "spinose",          // with spines along margin
+      "tridentate",       // with three teeth
+      "undulate",         // wavy
+    ],
+    ontology_map: {
+      "entire":      "PATO:0001851",
+      "serrate":     "PATO:0001399",
+      "dentate":     "PATO:0001856",
+      "crenulate":   "PATO:0001857",
+      "sinuate":     "PATO:0001858",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STRUCTURAL PROPERTIES (new categories not in original ATTR)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  luster: {
+    description: "Surface reflectance/shine quality",
+    source: "Taxonomic descriptive conventions",
+    extensible: true,
+    values: [
+      "matte", "dull", "subopaque", "weakly-shining", "shining",
+      "polished", "nitid", "vitreous", "greasy", "silky",
+      "waxy", "resinous", "pearlescent", "iridescent", "metallic"
+    ],
+    ontology_map: {
+      "matte":       "PATO:0001869",
+      "shining":     "PATO:0001392",
+      "iridescent":  "PATO:0001871",
+      "metallic":    "PATO:0001873",
+    }
+  },
+
+  transparency: {
+    description: "Light transmission through structure",
+    source: "PATO + taxonomic usage (wings, integument)",
+    extensible: true,
+    values: [
+      "opaque", "subopaque", "translucent", "subtranslucent",
+      "hyaline", "fenestrate", "infuscate", "fumose", "pellucid"
+    ],
+    ontology_map: {
+      "opaque":      "PATO:0001348",
+      "translucent": "PATO:0001346",
+      "hyaline":     "PATO:0001414",
+    }
+  },
+
+  symmetry: {
+    description: "Bilateral/radial symmetry of a structure",
+    source: "PATO",
+    extensible: false,
+    values: [
+      "symmetric", "asymmetric", "weakly-asymmetric",
+      "bilaterally-symmetric", "radially-symmetric"
+    ],
+    ontology_map: {
+      "symmetric":             "PATO:0000607",
+      "asymmetric":            "PATO:0000616",
+      "bilaterally-symmetric": "PATO:0000609",
+      "radially-symmetric":    "PATO:0000618",
+    }
+  },
+
+  relative_size: {
+    description: "Size relative to typical/expected for the taxon or body region",
+    source: "PATO size + taxonomic conventions",
+    extensible: true,
+    values: [
+      "reduced", "vestigial", "minute", "small", "medium",
+      "large", "enlarged", "hypertrophied", "subequal",
+      "equal", "unequal", "longer-than-wide", "wider-than-long",
+      "as-long-as-wide"
+    ],
+    ontology_map: {
+      "reduced":       "PATO:0001511",
+      "vestigial":     "PATO:0001636",
+      "enlarged":      "PATO:0000586",
+      "small":         "PATO:0000587",
+      "large":         "PATO:0000588",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // WING VENATION (Hymenoptera/Diptera/Coleoptera-specific)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  wing_venation: {
+    description: "Wing vein development and pattern",
+    source: "HAO wing vein terms",
+    extensible: true,
+    values: [
+      "complete", "reduced", "vestigial", "absent",
+      "nebulous", "spectral", "tubular", "pigmented",
+      "unpigmented", "petiolate", "sessile",
+      // Specific vein conditions
+      "stigma-present", "stigma-absent",
+      "crossvein-present", "crossvein-absent",
+      "closed-cells", "open-cells"
+    ],
+    ontology_map: {
+      "complete":  "PATO:0002249",
+      "reduced":   "PATO:0001511",
+      "vestigial": "PATO:0001636",
+      "absent":    "PATO:0000462",
+    }
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVIDENCE / PROVENANCE (for RAG-generated descriptions)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  evidence_source: {
+    description: "How a trait was observed/inferred — critical for VLM training data",
+    source: "Descriptron internal",
+    extensible: false,
+    values: [
+      "visible_in_image",           // can be seen in the specimen photo
+      "visible_in_segmented_image", // visible only in isolated/segmented region
+      "visible_in_sem",             // requires SEM imaging
+      "visible_in_micro_ct",        // requires micro-CT
+      "requires_dissection",        // requires physical dissection
+      "requires_slide_mount",       // requires slide-mounted preparation
+      "inferred_from_description",  // from text in taxonomic treatment
+      "inferred_from_related_taxa", // inferred by analogy
+      "measured",                   // from direct measurement
+      "unknown"                     // evidence source not determined
+    ],
+    ontology_map: {}
+  },
+
+  confidence_level: {
+    description: "Confidence in trait assignment — for VLM/RAG outputs",
+    source: "Descriptron internal",
+    extensible: false,
+    values: [
+      "certain", "probable", "possible", "uncertain", "inferred"
+    ],
+    ontology_map: {}
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PLANT-SPECIFIC ATTRIBUTES (expanded)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  plant_color: {
+    description: "Color of plant organs",
+    source: "PO + botanical literature",
+    extensible: true,
+    values: [
+      "green", "dark green", "light green", "yellow-green", "yellow", "orange",
+      "red", "purple", "brown", "white", "cream", "variegated", "glaucous",
+      // === Expanded ===
+      "anthocyanic",      // purple/red from anthocyanins
+      "chlorotic",        // abnormally yellow
+      "ferrugineous",     // rust-colored
+      "livid",            // grayish-blue
+      "lutescent",        // becoming yellow
+      "rufescent",        // becoming reddish
+      "sanguine",         // blood-red
+      "vinaceous",        // wine-colored
+    ],
+    ontology_map: {
+      "glaucous": "PATO:0001865",
+    }
+  },
+
+  plant_texture: {
+    description: "Surface texture of plant organs",
+    source: "PO + botanical literature",
+    extensible: true,
+    values: [
+      "glabrous", "pubescent", "tomentose", "hirsute", "villous", "scabrous",
+      "glandular", "waxy", "glossy", "matte", "papillate", "rugose",
+      // === Expanded ===
+      "arachnoid",    "canescent",    "ciliolate",    "farinose",
+      "flocculose",   "lanate",       "lepidote",     "muriculate",
+      "pilose",       "puberulent",   "sericeous",    "setaceous",
+      "strigose",     "velutinous",   "viscid",
+    ],
+    ontology_map: {}
+  },
+
+  plant_shape: {
+    description: "Shape of plant organs (leaves, petals, etc.)",
+    source: "PO + botanical literature",
+    extensible: true,
+    values: [
+      "ovate", "lanceolate", "oblong", "elliptic", "linear", "cordate",
+      "orbicular", "spatulate", "obovate", "deltoid", "reniform", "hastate",
+      "sagittate", "palmate", "pinnate",
+      // === Expanded ===
+      "acicular",     "attenuate",    "auriculate",   "bilobed",
+      "bipinnate",    "cuneate",      "digitate",     "falcate",
+      "filiform",     "flabellate",   "lyrate",       "oblanceolate",
+      "pandurate",    "peltate",      "perfoliate",   "rhomboidal",
+      "runcinate",    "subulate",     "trifoliate",   "trilobate",
+      "truncate",
+    ],
+    ontology_map: {
+      "ovate":      "PO:0001078",
+      "lanceolate": "PO:0001079",
+      "cordate":    "PO:0001080",
+    }
+  },
+
+  petal_shape: {
+    description: "Shape of individual petals or corolla",
+    source: "Botanical literature",
+    extensible: true,
+    values: [
+      "entire", "lobed", "fringed", "tubular", "bilabiate", "papilionate",
+      "cruciform", "rotate", "campanulate", "funnel-shaped", "salverform",
+      // === Expanded ===
+      "urceolate", "stellate", "spurred", "hooded", "galeate",
+      "ligulate", "personate", "ringent", "labiate",
+    ],
+    ontology_map: {}
+  },
+
+  leaf_margin: {
+    description: "Edge character of leaves",
+    source: "PO + botanical literature",
+    extensible: true,
+    values: [
+      "entire", "serrate", "dentate", "crenate", "lobed", "sinuate",
+      "undulate", "ciliate", "revolute",
+      // === Expanded ===
+      "biserrate", "doubly-dentate", "erose", "incised",
+      "involute", "lacerate", "laciniate", "palmately-lobed",
+      "parted", "pinnately-lobed", "repand", "retrorsely-serrate",
+      "serrulate", "spinose",
+    ],
+    ontology_map: {}
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MOLLUSC-SPECIFIC (expanded)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  shell_shape: {
+    description: "Overall shell morphology",
+    source: "Malacological literature",
+    extensible: true,
+    values: [
+      "globose", "turbinate", "conical", "discoidal", "fusiform", "patelliform",
+      "trochiform", "auriform", "biconical", "planorboid",
+      // === Expanded ===
+      "turreted", "pupiform", "cylindrical", "heliciform", "depressed",
+      "lenticular", "naticoid", "ovate-conical", "subglobose",
+    ],
+    ontology_map: {}
+  },
+
+  shell_sculpture: {
+    description: "Surface sculpture on shells",
+    source: "Malacological literature",
+    extensible: true,
+    values: [
+      "smooth", "ribbed", "striate", "cancellate", "nodulose", "spinose",
+      "lamellate", "decussate", "pustulate", "granulate",
+      // === Expanded ===
+      "costate", "fenestrate", "lirate", "malleate", "reticulate",
+      "scabrous", "spirally-striate", "varicose",
+    ],
+    ontology_map: {}
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VERTEBRATE-SPECIFIC (fish, reptile, bird, mammal — expanded)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  scale_type: {
+    description: "Scale morphology in fish",
+    source: "Ichthyological literature",
+    extensible: true,
+    values: [
+      "cycloid", "ctenoid", "ganoid", "placoid", "cosmoid", "absent",
+      "rhomboidal", "leptoid",
+    ],
+    ontology_map: {}
+  },
+
+  reptile_scale_type: {
+    description: "Reptilian scale morphology",
+    source: "Herpetological literature",
+    extensible: true,
+    values: [
+      "smooth", "keeled", "granular", "tuberculate", "imbricate", "juxtaposed",
+      "mucronate", "scute", "osteoderm", "heterogeneous",
+      // === Expanded ===
+      "cycloid-reptile", "hexagonal", "lanceolate-keeled", "pluricarinate",
+      "striated", "subimbricate", "trihedral",
+    ],
+    ontology_map: {}
+  },
+
+  feather_type: {
+    description: "Feather morphological categories",
+    source: "Ornithological literature + UBERON",
+    extensible: true,
+    values: [
+      "contour", "down", "semiplume", "filoplume", "bristle", "powder down",
+      // === Expanded ===
+      "afterfeather", "pennaceous", "plumulaceous", "retrices", "remiges",
+    ],
+    ontology_map: {}
+  },
+
+  plumage: {
+    description: "Plumage pattern type",
+    source: "Ornithological literature",
+    extensible: true,
+    values: [
+      "uniform", "streaked", "barred", "spotted", "mottled", "iridescent",
+      "metallic", "cryptic", "dimorphic",
+      // === Expanded ===
+      "eclipse", "breeding", "non-breeding", "juvenile", "adult",
+      "rufous-phase", "gray-phase",
+    ],
+    ontology_map: {}
+  },
+
+  skin_texture: {
+    description: "Skin surface character (amphibians, mammals)",
+    source: "Zoological literature",
+    extensible: true,
+    values: [
+      "smooth", "granular", "tuberculate", "keeled", "spiny", "plated",
+      "scaled", "warty", "slimy", "dry",
+      // === Expanded ===
+      "areolate", "glandular", "mucous", "papillate", "rugose", "verrucose",
+    ],
+    ontology_map: {}
+  },
+
+  horn_type: {
+    description: "Horn/antler morphology",
+    source: "Mammalogical literature + UBERON",
+    extensible: true,
+    values: [
+      "absent", "single", "paired", "branched", "spiraled", "recurved",
+      "ringed", "smooth",
+      // === Expanded ===
+      "bossed", "deciduous", "keratinous", "osseous", "palmate-antler",
+      "tined", "velvet-covered",
+    ],
+    ontology_map: {}
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FUNGI-SPECIFIC (expanded)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  cap_shape: {
+    description: "Pileus shape",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "convex", "flat", "umbonate", "campanulate", "conical", "depressed",
+      "infundibuliform", "ovoid", "hemispherical", "irregular",
+      // === Expanded ===
+      "applanate", "cuspidate", "mammiform", "parabolic", "pulvinate",
+      "subumbonate", "turbinate", "umbilicate",
+    ],
+    ontology_map: {}
+  },
+
+  cap_surface: {
+    description: "Pileus surface character",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "smooth", "fibrillose", "squamose", "viscid", "dry", "areolate",
+      "rimose", "pruinose", "tomentose", "glabrous", "hygrophanous",
+      // === Expanded ===
+      "glutinous", "innately-fibrillose", "rivulose", "scurfy",
+      "striate-margin", "sulcate", "wrinkled",
+    ],
+    ontology_map: {}
+  },
+
+  gill_attachment: {
+    description: "Lamella attachment to stipe",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "free", "adnate", "adnexed", "decurrent", "sinuate",
+      "subdecurrent", "emarginate",
+      // === Expanded ===
+      "arcuate-decurrent", "broadly-adnate", "collared", "seceding",
+    ],
+    ontology_map: {}
+  },
+
+  spore_print: {
+    description: "Spore deposit color",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "white", "cream", "yellow", "pink", "brown", "dark brown",
+      "black", "rust", "olive", "purple-brown",
+      // === Expanded ===
+      "buff", "clay", "cinnamon", "cocoa", "green", "lilac",
+      "ochre", "salmon", "vinaceous",
+    ],
+    ontology_map: {}
+  },
+
+  hymenium: {
+    description: "Fertile surface type",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "gills", "pores", "teeth", "smooth", "ridged", "wrinkled", "veined",
+      // === Expanded ===
+      "anastomosing", "labyrinthine", "merulioid", "poroid-angular",
+    ],
+    ontology_map: {}
+  },
+
+  stipe_surface: {
+    description: "Stipe surface character",
+    source: "Mycological literature",
+    extensible: true,
+    values: [
+      "smooth", "fibrillose", "scaly", "reticulate", "pruinose",
+      "glandular-dotted", "striate",
+      // === Expanded ===
+      "annulate", "cortinate", "floccose", "granulose", "lacerate",
+      "peronate", "squarrose",
+    ],
+    ontology_map: {}
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LICHEN / BRYOPHYTE / FLATWORM (carried over from original, minor expansion)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  thallus_type: {
+    values: ["crustose","foliose","fruticose","squamulose","leprose","filamentous","gelatinous","dimorphic"],
+    ontology_map: {}, extensible: true,
+    description: "Lichen thallus growth form", source: "Lichenological literature"
+  },
+  thallus_surface: {
+    values: ["smooth","rough","pruinose","sorediate","isidiate","lobulate","papillate","areolate","cracked"],
+    ontology_map: {}, extensible: true,
+    description: "Lichen thallus surface", source: "Lichenological literature"
+  },
+  leaf_arrangement: {
+    values: ["distichous","spiral","complanate","julaceous","squarrose","secund","imbricate","spreading","appressed","falcate"],
+    ontology_map: {}, extensible: true,
+    description: "Bryophyte leaf arrangement", source: "Bryological literature"
+  },
+  bryophyte_habit: {
+    values: ["acrocarpous","pleurocarpous","thalloid","thallose","dendroid","pendant","cushion","mat","turf","weft"],
+    ontology_map: {}, extensible: true,
+    description: "Bryophyte growth habit", source: "Bryological literature"
+  },
+  capsule_shape: {
+    values: ["cylindrical","ovoid","pyriform","globose","urceolate","arcuate","pendulous","erect","inclined","cernuous"],
+    ontology_map: {}, extensible: true,
+    description: "Bryophyte capsule shape", source: "Bryological literature"
+  },
+  peristome_type: {
+    values: ["absent","single","double","nematodontous","arthrodontous","diplolepidous","haplolepidous"],
+    ontology_map: {}, extensible: false,
+    description: "Bryophyte peristome structure", source: "Bryological literature"
+  },
+  body_symmetry: {
+    values: ["bilateral","radial","asymmetric","elongate","ovate","lanceolate","ribbon-like","leaf-shaped"],
+    ontology_map: {}, extensible: true,
+    description: "Flatworm body symmetry", source: "Platyhelminth literature"
+  },
+  pharynx_type: {
+    values: ["simple","bulbous","plicate","variable","rhabdocoel","triclad","polyclad"],
+    ontology_map: {}, extensible: false,
+    description: "Flatworm pharynx morphology", source: "Platyhelminth literature"
+  },
+  eye_pattern: {
+    values: ["absent","two","multiple_paired","clustered","marginal","tentacular","cerebral","inverse_cup"],
+    ontology_map: {}, extensible: true,
+    description: "Flatworm eye arrangement", source: "Platyhelminth literature"
+  },
+  flatworm_color: {
+    values: ["translucent","white","cream","brown","black","orange","red","yellow","green","striped","spotted","banded","mottled","iridescent"],
+    ontology_map: {}, extensible: true,
+    description: "Flatworm coloration", source: "Platyhelminth literature"
+  },
+  flatworm_margin: {
+    values: ["smooth","ruffled","undulate","crenulate","papillate","tentaculate","pseudotentaculate"],
+    ontology_map: {}, extensible: true,
+    description: "Flatworm body margin", source: "Platyhelminth literature"
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UTILITY METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Convert to the simple ATTR format used by descriptron-gbif-annotator.html
+   * (just category → string[])
+   */
+  toSimpleATTR() {
+    const attr = {};
+    const skip = new Set(["version","build_date","sources","toSimpleATTR","addTerm",
+      "getOntologyURI","listCategories","getCategoryInfo","toJSON","fromJSON",
+      "validateTerm","searchTerms"]);
+    for (const [key, val] of Object.entries(this)) {
+      if (skip.has(key) || typeof val === 'function' || typeof val === 'string') continue;
+      if (val && Array.isArray(val.values)) {
+        attr[key] = val.values;
+      }
+    }
+    return attr;
+  },
+
+  /**
+   * Add a new term to a category at runtime (for RAG/user extensions)
+   * Returns true if added, false if category not extensible or term exists
+   */
+  addTerm(category, term, ontology_uri) {
+    const cat = this[category];
+    if (!cat || !cat.extensible) return false;
+    if (cat.values.includes(term)) return false;
+    cat.values.push(term);
+    if (ontology_uri && cat.ontology_map) {
+      cat.ontology_map[term] = ontology_uri;
+    }
+    return true;
+  },
+
+  /**
+   * Look up ontology URI for a term in a given category
+   */
+  getOntologyURI(category, term) {
+    const cat = this[category];
+    if (!cat || !cat.ontology_map) return null;
+    return cat.ontology_map[term] || null;
+  },
+
+  /**
+   * List all categories
+   */
+  listCategories() {
+    const skip = new Set(["version","build_date","sources"]);
+    return Object.keys(this).filter(k =>
+      !skip.has(k) && typeof this[k] === 'object' && !Array.isArray(this[k]) && this[k]?.values
+    );
+  },
+
+  /**
+   * Get full info for a category
+   */
+  getCategoryInfo(category) {
+    const cat = this[category];
+    if (!cat) return null;
+    return {
+      name: category,
+      description: cat.description,
+      source: cat.source,
+      extensible: cat.extensible,
+      term_count: cat.values.length,
+      ontology_mapped_count: cat.ontology_map ? Object.keys(cat.ontology_map).length : 0,
+    };
+  },
+
+  /**
+   * Search across all categories for a term (fuzzy substring match)
+   */
+  searchTerms(query) {
+    const q = query.toLowerCase();
+    const results = [];
+    for (const cat of this.listCategories()) {
+      for (const term of this[cat].values) {
+        if (term.toLowerCase().includes(q)) {
+          results.push({
+            category: cat,
+            term: term,
+            ontology_uri: this.getOntologyURI(cat, term),
+          });
+        }
+      }
+    }
+    return results;
+  },
+
+  /**
+   * Export full rosetta as JSON (for archival/versioning)
+   */
+  toJSON() {
+    const out = { version: this.version, build_date: this.build_date, sources: this.sources, categories: {} };
+    for (const cat of this.listCategories()) {
+      out.categories[cat] = {
+        description: this[cat].description,
+        source: this[cat].source,
+        extensible: this[cat].extensible,
+        values: this[cat].values,
+        ontology_map: this[cat].ontology_map || {},
+      };
+    }
+    return out;
+  },
+
+  /**
+   * Validate a term against its category, returning status
+   */
+  validateTerm(category, term) {
+    const cat = this[category];
+    if (!cat) return { valid: false, reason: `Unknown category: ${category}` };
+    if (cat.values.includes(term)) {
+      return {
+        valid: true,
+        in_controlled_vocabulary: true,
+        ontology_uri: this.getOntologyURI(category, term),
+      };
+    }
+    return {
+      valid: false,
+      in_controlled_vocabulary: false,
+      suggestion: cat.extensible ? "Term can be added via addTerm()" : "Category is not extensible",
+      closest_matches: cat.values.filter(v => v.includes(term.substring(0, 3))).slice(0, 5),
+    };
+  },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUMMARY STATISTICS (logged on load)
+// ═══════════════════════════════════════════════════════════════════════════════
+if (typeof console !== 'undefined') {
+  const cats = ROSETTA.listCategories();
+  const totalTerms = cats.reduce((sum, c) => sum + ROSETTA[c].values.length, 0);
+  const totalMapped = cats.reduce((sum, c) => sum + Object.keys(ROSETTA[c].ontology_map || {}).length, 0);
+  const extensibleCount = cats.filter(c => ROSETTA[c].extensible).length;
+  console.log(`[ROSETTA v${ROSETTA.version}] ${cats.length} categories, ${totalTerms} terms, ${totalMapped} ontology mappings, ${extensibleCount} extensible`);
+}
+
+// For Node.js / module usage
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = ROSETTA;
+}
+const ATTR = ROSETTA.toSimpleATTR();
 
 // ═══════════════════════════════════════════════════════════════════════
 // MORPHOLOGY TEMPLATES (abbreviated — same as v2)
@@ -559,176 +1729,176 @@ const FORMICIDAE={
     {id:"gena",label:"Gena",color:c(6),ontology:"HAO:0000371"},{id:"vertex",label:"Vertex",color:c(7),ontology:"HAO:0001077"},
     {id:"occiput",label:"Occiput",color:c(8),ontology:"HAO:0000658"},{id:"frontal_carina",label:"Frontal Carina",color:c(9),ontology:"HAO:0000355"},
     {id:"antennal_scrobe",label:"Antennal Scrobe",color:c(10),ontology:"HAO:0000908"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster,relative_size:ATTR.relative_size}},
   head_frontal:{group:"Formicidae",view:"Head (full-face)",regions:[
     {id:"mandible",label:"Mandible",color:c(0),ontology:"HAO:0000506"},{id:"clypeus",label:"Clypeus",color:c(1),ontology:"HAO:0000212"},
     {id:"frons",label:"Frons",color:c(2),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(3),ontology:"HAO:0000217"},
     {id:"frontal_lobe",label:"Frontal Lobe",color:c(4),ontology:"HAO:0000354"},{id:"antennal_insertion",label:"Antennal Insertion",color:c(5),ontology:"HAO:0000908"},
     {id:"gena",label:"Gena",color:c(6),ontology:"HAO:0000371"},{id:"posterior_margin",label:"Posterior Head Margin",color:c(7),ontology:"HAO:0000658"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,margin:ATTR.margin}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,margin:ATTR.margin,luster:ATTR.luster}},
   mesosoma_lateral:{group:"Formicidae",view:"Mesosoma (lateral)",regions:[
     {id:"pronotum",label:"Pronotum",color:c(0),ontology:"HAO:0000853"},{id:"mesonotum",label:"Mesonotum",color:c(1),ontology:"HAO:0000575"},
     {id:"mesopleuron",label:"Mesopleuron",color:c(2),ontology:"HAO:0000566"},{id:"propodeum",label:"Propodeum",color:c(3),ontology:"HAO:0000862"},
     {id:"propodeal_spine",label:"Propodeal Spine",color:c(4),ontology:"HAO:0000860"},{id:"metapleuron",label:"Metapleuron",color:c(5),ontology:"HAO:0000621"},
     {id:"promesonotal_suture",label:"Promesonotal Suture",color:c(6),ontology:"HAO:0000853"},{id:"metanotal_groove",label:"Metanotal Groove",color:c(7),ontology:"HAO:0000614"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape,luster:ATTR.luster}},
   waist:{group:"Formicidae",view:"Waist",regions:[
     {id:"petiole",label:"Petiole",color:c(0),ontology:"HAO:0000757"},{id:"petiolar_node",label:"Petiolar Node",color:c(1),ontology:"HAO:0000757"},
     {id:"subpetiolar_process",label:"Subpetiolar Process",color:c(2),ontology:"HAO:0000757"},{id:"postpetiole",label:"Postpetiole",color:c(3),ontology:"HAO:0000816"},
     {id:"helcium",label:"Helcium",color:c(4),ontology:"HAO:0000399"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,shape:ATTR.shape,luster:ATTR.luster}},
   gaster:{group:"Formicidae",view:"Gaster",regions:[
     {id:"first_gastral_tergite",label:"1st Gastral Tergite",color:c(0),ontology:"HAO:0001005"},
     {id:"first_gastral_sternite",label:"1st Gastral Sternite",color:c(1),ontology:"HAO:0000950"},
     {id:"sting",label:"Sting/Acidopore",color:c(2),ontology:"HAO:0000929"},
-  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_ventral:{group:"Formicidae",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster,color_pattern:ATTR.color_pattern}}
 };
 const COLEOPTERA={habitus_dorsal:{group:"Coleoptera",view:"Habitus (dorsal)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"COLAO:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"COLAO:0000002"},
   {id:"scutellum",label:"Scutellum",color:c(2),ontology:"COLAO:0000003"},{id:"elytra",label:"Elytra",color:c(3),ontology:"COLAO:0000004"},
   {id:"elytral_striae",label:"Elytral Striae",color:c(4),ontology:"COLAO:0000005"},{id:"humeral_angle",label:"Humeral Angle",color:c(5),ontology:"COLAO:0000007"},
   {id:"antenna",label:"Antenna",color:c(6),ontology:"COLAO:0000008"},{id:"leg",label:"Leg",color:c(7),ontology:"COLAO:0000009"},
-],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster,relative_size:ATTR.relative_size}},
   habitus_lateral:{group:"Coleoptera",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"COLAO:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"COLAO:0000002"},
     {id:"elytra",label:"Elytra",color:c(3),ontology:"COLAO:0000004"},{id:"prosternum",label:"Prosternum",color:c(4),ontology:"COLAO:0000020"},
     {id:"mesepimeron",label:"Mesepimeron",color:c(5),ontology:"COLAO:0000021"},{id:"metepisternum",label:"Metepisternum",color:c(6),ontology:"COLAO:0000022"},
     {id:"leg",label:"Leg",color:c(7),ontology:"COLAO:0000009"},{id:"antenna",label:"Antenna",color:c(8),ontology:"COLAO:0000008"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Coleoptera",view:"Habitus (ventral)",regions:[
     {id:"mentum",label:"Mentum",color:c(0),ontology:"COLAO:0000030"},{id:"gula",label:"Gula",color:c(1),ontology:"COLAO:0000031"},
     {id:"prosternum",label:"Prosternum",color:c(2),ontology:"COLAO:0000020"},{id:"mesosternum",label:"Mesosternum",color:c(3),ontology:"COLAO:0000023"},
     {id:"metasternum",label:"Metasternum",color:c(4),ontology:"COLAO:0000024"},{id:"abdomen_ventral",label:"Abdominal Ventrites",color:c(5),ontology:"COLAO:0000025"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,luster:ATTR.luster}},
   head_dorsal:{group:"Coleoptera",view:"Head (dorsal)",regions:[
     {id:"frons",label:"Frons",color:c(0),ontology:"COLAO:0000010"},{id:"vertex",label:"Vertex",color:c(1),ontology:"COLAO:0000011"},
     {id:"eye",label:"Compound Eye",color:c(2),ontology:"HAO:0000217"},{id:"mandible",label:"Mandible",color:c(3),ontology:"COLAO:0000012"},
     {id:"antenna",label:"Antenna",color:c(4),ontology:"COLAO:0000008"},{id:"clypeus",label:"Clypeus",color:c(5),ontology:"COLAO:0000013"},
     {id:"labrum",label:"Labrum",color:c(6),ontology:"COLAO:0000014"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,luster:ATTR.luster,relative_size:ATTR.relative_size}},
   head_frontal:{group:"Coleoptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons",color:c(0),ontology:"COLAO:0000010"},{id:"clypeus",label:"Clypeus",color:c(1),ontology:"COLAO:0000013"},
     {id:"eye",label:"Compound Eye",color:c(2),ontology:"HAO:0000217"},{id:"mandible",label:"Mandible",color:c(3),ontology:"COLAO:0000012"},
     {id:"antenna",label:"Antenna",color:c(4),ontology:"COLAO:0000008"},{id:"labrum",label:"Labrum",color:c(5),ontology:"COLAO:0000014"},
     {id:"maxillary_palp",label:"Maxillary Palp",color:c(6),ontology:"COLAO:0000015"},
-  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.surface_covering,color:ATTR.color,luster:ATTR.luster}}
 };
 const LEPIDOPTERA={wings_dorsal:{group:"Lepidoptera",view:"Wings (dorsal)",regions:[
   {id:"forewing",label:"Forewing",color:c(0),ontology:"HAO:0001094"},{id:"hindwing",label:"Hindwing",color:c(1),ontology:"HAO:0001094"},
   {id:"fw_discal_cell",label:"FW Discal Cell",color:c(2),ontology:"LEP:0000002"},{id:"fw_margin",label:"FW Outer Margin",color:c(3),ontology:"LEP:0000005"},
   {id:"hw_discal_cell",label:"HW Discal Cell",color:c(4),ontology:"LEP:0000006"},{id:"body",label:"Body/Thorax",color:c(5),ontology:"LEP:0000008"},
-],attributes:{color:ATTR.color,color_pattern:["uniform","spotted","striped","banded","ocellate","mottled","iridescent"],scales:["powdery","glossy","metallic","transparent","dense","sparse"]}},
+],attributes:{color:ATTR.color,color_pattern:["uniform","spotted","striped","banded","ocellate","mottled","iridescent"],scales:["powdery","glossy","metallic","transparent","dense","sparse"],luster:ATTR.luster}},
   habitus_lateral:{group:"Lepidoptera",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern,setae:ATTR.setae,luster:ATTR.luster}},
   habitus_ventral:{group:"Lepidoptera",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern,setae:ATTR.setae}},
   head_frontal:{group:"Lepidoptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}}
+  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern,setae:ATTR.setae}}
 };
 const DIPTERA={habitus_lateral:{group:"Diptera",view:"Habitus (lateral)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"HAO:0000397"},{id:"thorax",label:"Thorax",color:c(1),ontology:"HAO:0001013"},
   {id:"wing",label:"Wing",color:c(2),ontology:"HAO:0001094"},{id:"haltere",label:"Haltere",color:c(3),ontology:"HAO:0000393"},
   {id:"abdomen",label:"Abdomen",color:c(4),ontology:"HAO:0000015"},{id:"leg",label:"Leg",color:c(5),ontology:"HAO:0000494"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,surface_covering:ATTR.surface_covering}},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,surface_covering:ATTR.surface_covering,luster:ATTR.luster}},
   habitus_dorsal:{group:"Diptera",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"HAO:0000397"},{id:"scutum",label:"Scutum",color:c(1),ontology:"HAO:0000906"},
     {id:"scutellum",label:"Scutellum",color:c(2),ontology:"HAO:0000906"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"abdomen",label:"Abdomen",color:c(4),ontology:"HAO:0000015"},{id:"leg",label:"Leg",color:c(5),ontology:"HAO:0000494"},
-  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   head_frontal:{group:"Diptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons",color:c(0),ontology:"HAO:0000352"},{id:"face",label:"Face",color:c(1),ontology:"HAO:0000340"},
     {id:"eye",label:"Compound Eye",color:c(2),ontology:"HAO:0000217"},{id:"antenna",label:"Antenna",color:c(3),ontology:"HAO:0000101"},
     {id:"arista",label:"Arista",color:c(4),ontology:"HAO:0000108"},{id:"proboscis",label:"Proboscis",color:c(5),ontology:"HAO:0000828"},
     {id:"palpus",label:"Palpus",color:c(6),ontology:"HAO:0000700"},{id:"ocellar_triangle",label:"Ocellar Triangle",color:c(7),ontology:"HAO:0000662"},
-  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Diptera",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const HYMENOPTERA={habitus_lateral:{group:"Hymenoptera",view:"Habitus (lateral)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"HAO:0000397"},{id:"mesosoma",label:"Mesosoma",color:c(1),ontology:"HAO:0000576"},
   {id:"propodeum",label:"Propodeum",color:c(2),ontology:"HAO:0000862"},{id:"metasoma",label:"Metasoma",color:c(3),ontology:"HAO:0000626"},
   {id:"petiole",label:"Petiole",color:c(4),ontology:"HAO:0000757"},{id:"wing",label:"Forewing",color:c(5),ontology:"HAO:0001094"},
   {id:"ovipositor",label:"Ovipositor/Sting",color:c(6),ontology:"HAO:0000679"},{id:"leg",label:"Leg",color:c(7),ontology:"HAO:0000494"},
-],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color}},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster,wing_venation:ATTR.wing_venation}},
   habitus_dorsal:{group:"Hymenoptera",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Notum",color:c(1),ontology:"UBERON:0000915"},
     {id:"wing",label:"Wings",color:c(2),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(3),ontology:"UBERON:0000916"},
     {id:"leg",label:"Legs",color:c(4),ontology:"HAO:0000494"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster,wing_venation:ATTR.wing_venation}},
   habitus_ventral:{group:"Hymenoptera",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   head_frontal:{group:"Hymenoptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const HEMIPTERA={habitus_dorsal:{group:"Hemiptera",view:"Habitus (dorsal)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"HEM:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"HEM:0000002"},
   {id:"scutellum",label:"Scutellum",color:c(2),ontology:"HEM:0000003"},{id:"corium",label:"Corium",color:c(3),ontology:"HEM:0000005"},
   {id:"membrane",label:"Hemelytral Membrane",color:c(4),ontology:"HEM:0000006"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_lateral:{group:"Hemiptera",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Hemiptera",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Hemiptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const ORTHOPTERA={habitus_lateral:{group:"Orthoptera",view:"Habitus (lateral)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"ORT:0000001"},{id:"pronotum",label:"Pronotum",color:c(1),ontology:"ORT:0000003"},
   {id:"tegmen",label:"Tegmen",color:c(2),ontology:"ORT:0000005"},{id:"hind_femur",label:"Hind Femur",color:c(3),ontology:"ORT:0000007"},
   {id:"hind_tibia",label:"Hind Tibia",color:c(4),ontology:"ORT:0000008"},{id:"cerci",label:"Cerci",color:c(5),ontology:"ORT:0000009"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_dorsal:{group:"Orthoptera",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Notum",color:c(1),ontology:"UBERON:0000915"},
     {id:"wing",label:"Wings",color:c(2),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(3),ontology:"UBERON:0000916"},
     {id:"leg",label:"Legs",color:c(4),ontology:"HAO:0000494"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_ventral:{group:"Orthoptera",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
   head_frontal:{group:"Orthoptera",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}}
 };
 const ODONATA={habitus_lateral:{group:"Odonata",view:"Habitus (lateral)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"ODO:0000001"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
   {id:"synthorax",label:"Synthorax",color:c(2),ontology:"ODO:0000002"},{id:"forewing",label:"Forewing",color:c(3),ontology:"ODO:0000003"},
   {id:"hindwing",label:"Hindwing",color:c(4),ontology:"ODO:0000004"},{id:"abdomen",label:"Abdomen",color:c(5),ontology:"ODO:0000006"},
-],attributes:{color:ATTR.color,color_pattern:["uniform","banded","spotted","pruinose","metallic"],wing_marking:["hyaline","tinted","banded","spotted","infuscate"]}},
+],attributes:{color:ATTR.color,color_pattern:["uniform","banded","spotted","pruinose","metallic"],wing_marking:["hyaline","tinted","banded","spotted","infuscate"],luster:ATTR.luster,transparency:ATTR.transparency}},
   habitus_dorsal:{group:"Odonata",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Notum",color:c(1),ontology:"UBERON:0000915"},
     {id:"wing",label:"Wings",color:c(2),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(3),ontology:"UBERON:0000916"},
     {id:"leg",label:"Legs",color:c(4),ontology:"HAO:0000494"},
-  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern}},
+  ],attributes:{color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster,transparency:ATTR.transparency}},
   habitus_ventral:{group:"Odonata",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
@@ -744,41 +1914,41 @@ const ARANEAE={habitus_dorsal:{group:"Araneae",view:"Habitus (dorsal)",regions:[
   {id:"chelicerae",label:"Chelicerae",color:c(2),ontology:"SPD:0000003"},{id:"pedipalp",label:"Pedipalp",color:c(3),ontology:"SPD:0000004"},
   {id:"abdomen",label:"Opisthosoma",color:c(4),ontology:"SPD:0000006"},{id:"spinnerets",label:"Spinnerets",color:c(5),ontology:"SPD:0000007"},
   {id:"leg_I",label:"Leg I",color:c(6),ontology:"SPD:0000008"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_lateral:{group:"Araneae",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Araneae",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Araneae",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const CRUSTACEA={habitus_dorsal:{group:"Crustacea",view:"Habitus (dorsal)",regions:[
   {id:"carapace",label:"Carapace",color:c(0),ontology:"CRU:0000001"},{id:"eye",label:"Eye/Eyestalk",color:c(1),ontology:"CRU:0000003"},
   {id:"cheliped",label:"Cheliped",color:c(2),ontology:"CRU:0000006"},{id:"pereiopod",label:"Pereiopod",color:c(3),ontology:"CRU:0000007"},
   {id:"pleon",label:"Pleon/Abdomen",color:c(4),ontology:"CRU:0000008"},{id:"uropod",label:"Uropod",color:c(5),ontology:"CRU:0000009"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_lateral:{group:"Crustacea",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Crustacea",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Crustacea",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const GENERIC_INSECTA={habitus_dorsal:{group:"Insecta (generic)",view:"Habitus (dorsal)",regions:[
   {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
@@ -786,46 +1956,46 @@ const GENERIC_INSECTA={habitus_dorsal:{group:"Insecta (generic)",view:"Habitus (
   {id:"mesonotum",label:"Mesonotum",color:c(4),ontology:"HAO:0000575"},{id:"forewing",label:"Forewing",color:c(5),ontology:"HAO:0001094"},
   {id:"hindwing",label:"Hindwing",color:c(6),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(7),ontology:"HAO:0000015"},
   {id:"leg",label:"Leg",color:c(8),ontology:"HAO:0000494"},
-],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_lateral:{group:"Insecta (generic)",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Insecta (generic)",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Insecta (generic)",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const GENERIC_ARTHROPODA={habitus:{group:"Arthropoda (generic)",view:"Whole specimen",regions:[
   {id:"head",label:"Head/Cephalon",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax",color:c(1),ontology:"UBERON:0000915"},
   {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"appendage",label:"Appendage",color:c(3),ontology:"UBERON:0000026"},
   {id:"eye",label:"Eye",color:c(4),ontology:"UBERON:0000019"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-],attributes:{texture:ATTR.texture,color:ATTR.color,color_pattern:ATTR.color_pattern}},
+],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,color_pattern:ATTR.color_pattern,luster:ATTR.luster}},
   habitus_lateral:{group:"Arthropoda (generic)",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Mesosoma",color:c(1),ontology:"UBERON:0000915"},
     {id:"abdomen",label:"Abdomen",color:c(2),ontology:"UBERON:0000916"},{id:"wing",label:"Wing",color:c(3),ontology:"HAO:0001094"},
     {id:"leg",label:"Leg",color:c(4),ontology:"HAO:0000494"},{id:"antenna",label:"Antenna",color:c(5),ontology:"HAO:0000101"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_dorsal:{group:"Arthropoda (generic)",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"thorax",label:"Thorax/Notum",color:c(1),ontology:"UBERON:0000915"},
     {id:"wing",label:"Wings",color:c(2),ontology:"HAO:0001094"},{id:"abdomen",label:"Abdomen",color:c(3),ontology:"UBERON:0000916"},
     {id:"leg",label:"Legs",color:c(4),ontology:"HAO:0000494"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_ventral:{group:"Arthropoda (generic)",view:"Habitus (ventral)",regions:[
     {id:"head_ventral",label:"Head (ventral)",color:c(0),ontology:"UBERON:0000033"},{id:"sternum",label:"Sternum/Sternites",color:c(1),ontology:"HAO:0000950"},
     {id:"coxae",label:"Coxae",color:c(2),ontology:"HAO:0000228"},{id:"abdomen_ventral",label:"Abdomen (ventral)",color:c(3),ontology:"UBERON:0000916"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Arthropoda (generic)",view:"Head (frontal)",regions:[
     {id:"frons",label:"Frons/Face",color:c(0),ontology:"HAO:0000352"},{id:"eye",label:"Compound Eye",color:c(1),ontology:"HAO:0000217"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"HAO:0000101"},{id:"mandible",label:"Mandible",color:c(3),ontology:"HAO:0000506"},
     {id:"clypeus",label:"Clypeus",color:c(4),ontology:"HAO:0000212"},{id:"labrum",label:"Labrum/Mouthparts",color:c(5),ontology:"HAO:0000456"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 
 const MYRIAPODA={habitus_dorsal:{group:"Myriapoda",view:"Habitus (dorsal)",regions:[
@@ -833,22 +2003,22 @@ const MYRIAPODA={habitus_dorsal:{group:"Myriapoda",view:"Habitus (dorsal)",regio
   {id:"collum",label:"Collum",color:c(2),ontology:"MYR:0000003"},{id:"tergite",label:"Tergites",color:c(3),ontology:"MYR:0000004"},
   {id:"paranota",label:"Paranota/Keels",color:c(4),ontology:"MYR:0000005"},{id:"ozopore",label:"Ozopore/Repugnatorial Gland",color:c(5),ontology:"MYR:0000006"},
   {id:"telson",label:"Telson/Pygidium",color:c(6),ontology:"MYR:0000007"},{id:"leg",label:"Leg",color:c(7),ontology:"MYR:0000008"},
-],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,color:ATTR.color,setae:ATTR.setae}},
+],attributes:{texture:ATTR.texture,sculpture:ATTR.sculpture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   habitus_lateral:{group:"Myriapoda",view:"Habitus (lateral)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"MYR:0000001"},{id:"forcipule",label:"Forcipule/Gnathochilarium",color:c(1),ontology:"MYR:0000010"},
     {id:"trunk_segments",label:"Trunk Segments",color:c(2),ontology:"MYR:0000004"},{id:"leg",label:"Legs",color:c(3),ontology:"MYR:0000008"},
     {id:"antenna",label:"Antenna",color:c(4),ontology:"MYR:0000002"},{id:"sternite",label:"Sternites",color:c(5),ontology:"MYR:0000011"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color,setae:ATTR.setae}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}},
   head_ventral:{group:"Myriapoda",view:"Head (ventral)",regions:[
     {id:"gnathochilarium",label:"Gnathochilarium",color:c(0),ontology:"MYR:0000010"},{id:"mentum",label:"Mentum",color:c(1),ontology:"MYR:0000012"},
     {id:"stipes",label:"Stipes",color:c(2),ontology:"MYR:0000013"},{id:"lamella_lingualis",label:"Lamella Lingualis",color:c(3),ontology:"MYR:0000014"},
     {id:"mandible",label:"Mandible",color:c(4),ontology:"MYR:0000015"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}},
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color}},
   head_frontal:{group:"Myriapoda",view:"Head (frontal)",regions:[
     {id:"clypeus",label:"Clypeus/Labrum",color:c(0),ontology:"MYR:0000020"},{id:"mandible",label:"Mandible",color:c(1),ontology:"MYR:0000015"},
     {id:"antenna",label:"Antenna",color:c(2),ontology:"MYR:0000002"},{id:"eye",label:"Ocelli/Eyes",color:c(3),ontology:"MYR:0000021"},
     {id:"gnathochilarium",label:"Gnathochilarium",color:c(4),ontology:"MYR:0000010"},
-  ],attributes:{texture:ATTR.texture,color:ATTR.color}}
+  ],attributes:{texture:ATTR.texture,setae:ATTR.setae,color:ATTR.color,luster:ATTR.luster}}
 };
 const AVES={habitus_lateral:{group:"Aves",view:"Habitus (lateral)",regions:[
   {id:"crown",label:"Crown",color:c(0),ontology:"UBERON:0004339"},{id:"nape",label:"Nape",color:c(1),ontology:"UBERON:0012477"},
@@ -895,7 +2065,7 @@ const MAMMALIA={habitus_lateral:{group:"Mammalia",view:"Habitus (lateral)",regio
     {id:"orbit",label:"Orbit",color:c(2),ontology:"UBERON:0001697"},{id:"zygomatic",label:"Zygomatic Arch",color:c(3),ontology:"UBERON:0002396"},
     {id:"mandible",label:"Mandible",color:c(4),ontology:"UBERON:0001684"},{id:"dentition",label:"Dentition",color:c(5),ontology:"UBERON:0003672"},
     {id:"auditory_bulla",label:"Auditory Bulla",color:c(6),ontology:"UBERON:0008962"},{id:"sagittal_crest",label:"Sagittal Crest",color:c(7),ontology:"MAM:0000010"},
-  ],attributes:{shape:ATTR.shape,texture:ATTR.texture}},
+  ],attributes:{shape:ATTR.shape,texture:ATTR.texture,relative_size:ATTR.relative_size}},
   habitus_dorsal:{group:"Mammalia",view:"Habitus (dorsal)",regions:[
     {id:"head",label:"Head",color:c(0),ontology:"UBERON:0000033"},{id:"dorsum",label:"Dorsum/Back",color:c(1),ontology:"UBERON:0001137"},
     {id:"forelimb",label:"Forelimb",color:c(2),ontology:"UBERON:0002102"},{id:"hindlimb",label:"Hindlimb",color:c(3),ontology:"UBERON:0002103"},
@@ -1438,7 +2608,7 @@ generateURI();
 // ═══════════════════════════════════════════════════════════════════════
 // ANNOTATOR LOGIN (optional)
 // ═══════════════════════════════════════════════════════════════════════
-let annotator = {name:'',orcid:'',institution:'',sessionToken:null};
+let annotator = {name:'',orcid:'',institution:'',sessionToken:null,inat_login:'',inat_id:null,provider:''};
 function loadAnnotator(){
   try{const s=localStorage.getItem('descriptron_annotator');if(s){annotator=JSON.parse(s);updateLoginUI()}}catch(e){}
 }
@@ -1474,6 +2644,9 @@ function getAnnotatorInfo(){
   if(annotator.name)info.annotator_name=annotator.name;
   if(annotator.orcid)info.annotator_orcid=annotator.orcid;
   if(annotator.institution)info.annotator_institution=annotator.institution;
+  if(annotator.inat_login)info.inat_login=annotator.inat_login;
+  if(annotator.inat_id)info.inat_id=annotator.inat_id;
+  if(annotator.provider)info.auth_provider=annotator.provider;
   return Object.keys(info).length?info:null;
 }
 
@@ -1487,41 +2660,146 @@ function logEvent(eventType, details){
   }).catch(()=>{});  // Fire and forget
 }
 
+
+function alignImportedAnnotations(annotations) {
+    // 1. Check our flag! If it's a GBIF image, do absolutely nothing.
+    if (!state.isLocalBakedImage) {
+        return annotations; 
+    }
+
+    const rawW = state.rawImageWidth;
+    const rawH = state.rawImageHeight;
+    const bakedW = state.imgNaturalW; // Final canvas width
+    const bakedH = state.imgNaturalH; // Final canvas height
+
+    // 2. Did the browser visually rotate it 90 degrees? 
+    // We know this if the Landscape/Portrait orientation inverted.
+    const rawIsLandscape = rawW > rawH;
+    const bakedIsLandscape = bakedW > bakedH;
+    const isRotated = rawIsLandscape !== bakedIsLandscape;
+
+    // 3. Calculate scale. If rotated, raw height became baked width. 
+    const scaleX = isRotated ? (bakedW / rawH) : (bakedW / rawW);
+    const scaleY = isRotated ? (bakedH / rawW) : (bakedH / rawH);
+
+    annotations.forEach(ann => {
+        // Transform Polygon Segmentations
+        if (ann.segmentation && ann.segmentation.length > 0) {
+            for (let i = 0; i < ann.segmentation.length; i++) {
+                let poly = ann.segmentation[i];
+                for (let j = 0; j < poly.length; j += 2) {
+                    let x = poly[j];
+                    let y = poly[j+1];
+                    
+                    if (isRotated) {
+                        poly[j] = (rawH - y) * scaleX;
+                        poly[j+1] = x * scaleY;
+                    } else {
+                        poly[j] = x * scaleX;
+                        poly[j+1] = y * scaleY;
+                    }
+                }
+            }
+        }
+
+        // Transform Bounding Boxes [x, y, width, height]
+        if (ann.bbox) {
+            let [bx, by, bw, bh] = ann.bbox;
+            if (isRotated) {
+                ann.bbox = [
+                    (rawH - by - bh) * scaleX, // new X
+                    bx * scaleY,               // new Y
+                    bh * scaleX,               // new Width
+                    bw * scaleY                // new Height
+                ];
+            } else {
+                ann.bbox = [
+                    bx * scaleX,
+                    by * scaleY,
+                    bw * scaleX,
+                    bh * scaleY
+                ];
+            }
+        }
+    });
+    
+    return annotations;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // LOCAL IMAGE LOADING (file upload + drag-drop)
 // ═══════════════════════════════════════════════════════════════════════
 function loadLocalImage(file){
-  if(!file||!file.type.startsWith('image/'))return;
-  state.zoom=1;state.panX=0;state.panY=0;
-  clearAllAnnotations();
-  state.occurrenceData=state.occurrenceData||{};
-  $('url-input').value=file.name;
-  $('canvas-placeholder').style.display='flex';
-  $('canvas-placeholder').innerHTML='<div><div class="ph-icon">⏳</div><div>Loading image...</div></div>';
+   state.isLocalBakedImage = false;
+   if(!file||!file.type.startsWith('image/'))return;
+   state.zoom=1;state.panX=0;state.panY=0;
+   clearAllAnnotations();
+   state.occurrenceData=state.occurrenceData||{};
+   $('url-input').value=file.name;
+   $('canvas-placeholder').style.display='flex';
+   $('canvas-placeholder').innerHTML='<div><div class="ph-icon">⏳</div><div>Loading image...</div></div>';
 
-  // Step 1: Read file for immediate canvas display
-  const reader=new FileReader();
-  reader.onload=function(ev){
-    const dataUrl=ev.target.result;
-    const img=new Image();
-    img.onload=function(){
-      state.img=img;state.imgLoaded=true;
-      state.imageUrl=file.name;
-      state.originalFileName=file.name;
-      state.occurrenceData.imageURL=file.name;
-      state.occurrenceData.originalFileName=file.name;
-      drawImage();
-      showToast('Loaded: '+file.name);
+   const reader=new FileReader();
+   reader.onload=function(ev){
+     const dataUrl=ev.target.result;
+     const img=new Image();
+     
+     img.onload=function(){
+       // 1. Create canvas to bake EXIF and resize
+       const canvas = document.createElement('canvas');
+       const ctx = canvas.getContext('2d');
+       
+       // Remember raw state for JSON imports
+       state.isLocalBakedImage = true;
+       state.rawImageWidth = img.naturalWidth;
+       state.rawImageHeight = img.naturalHeight;
+       
+       // Cap size to prevent SAM2 memory crash
+       const MAX_SIZE = 1024;
+       let width = img.naturalWidth;
+       let height = img.naturalHeight;
+       if (width > MAX_SIZE || height > MAX_SIZE) {
+           const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
+           width *= ratio;
+           height *= ratio;
+       }
 
-      // Step 2: Upload to server for SAM2 encoding
-      uploadImageToServer(file);
-    };
-    img.onerror=function(){
-      $('canvas-placeholder').innerHTML='<div><div class="ph-icon">⚠️</div><div>Failed to load image</div></div>';
-    };
-    img.src=dataUrl;
-  };
-  reader.readAsDataURL(file);
+       canvas.width = width;
+       canvas.height = height;
+       ctx.drawImage(img, 0, 0, width, height);
+
+       // 2. Export clean image for UI canvas
+       const cleanDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+       const cleanImg = new Image();
+       
+       cleanImg.onload = function() {
+           // 3. Update state and draw
+           state.img = cleanImg;
+           state.imgLoaded = true;
+           state.imageUrl = file.name;
+           state.originalFileName = file.name;
+           state.occurrenceData.imageURL = file.name;
+           state.occurrenceData.originalFileName = file.name;
+           
+           drawImage();
+           showToast('Loaded: ' + file.name);
+
+           // 4. Export the resized blob and upload THAT to the server
+           canvas.toBlob(function(blob) {
+               // Ensure the blob is treated as a standard file upload
+               const cleanFile = new File([blob], file.name, { type: 'image/jpeg' });
+               uploadImageToServer(cleanFile);
+           }, 'image/jpeg', 0.85);
+       };
+       cleanImg.src = cleanDataUrl;
+     };
+     
+     img.onerror=function(){
+       $('canvas-placeholder').innerHTML='<div><div class="ph-icon">⚠️</div><div>Failed to load image</div></div>';
+     };
+     img.src=dataUrl;
+   };
+   reader.readAsDataURL(file);
 }
 
 async function uploadImageToServer(file){
@@ -3602,6 +4880,14 @@ function exportCOCO(download=true){
         console.log(`  Polygon result: ${result.polygons.length} polygons, first has ${result.polygons[0]?.length||0} coords, area=${result.area}, bbox=${JSON.stringify(result.bbox)}`);
 
         if(result.polygons.length>0 && result.polygons[0].length>=6){
+          // Quality check: ensure polygon covers a reasonable fraction of the mask
+          var _pc=result.polygons[0],_pxMin=Infinity,_pxMax=-Infinity,_pyMin=Infinity,_pyMax=-Infinity;
+          for(var _pi=0;_pi<_pc.length;_pi+=2){if(_pc[_pi]<_pxMin)_pxMin=_pc[_pi];if(_pc[_pi]>_pxMax)_pxMax=_pc[_pi];if(_pc[_pi+1]<_pyMin)_pyMin=_pc[_pi+1];if(_pc[_pi+1]>_pyMax)_pyMax=_pc[_pi+1];}
+          var _polyBbox=(_pxMax-_pxMin)*(_pyMax-_pyMin), _maskBbox=result.bbox[2]*result.bbox[3];
+          if(_maskBbox>100 && _polyBbox<_maskBbox*0.1){
+            console.warn('  Polygon covers only '+(_polyBbox/_maskBbox*100).toFixed(1)+'% of mask bbox — RLE fallback');
+            throw new Error('Polygon too small relative to mask');
+          }
           const ann={id:aid++, image_id:1, category_id:catId, instance_id:instanceId++,
             segmentation:result.polygons,
             bbox:result.bbox,
@@ -3666,6 +4952,21 @@ function exportCOCO(download=true){
         if(!(mData instanceof Uint8Array)){const len=pm.maskW*pm.maskH;const arr=new Uint8Array(len);for(let i=0;i<len;i++)arr[i]=mData[i]?1:0;mData=arr}
         const result=maskToPolygon(mData, pm.maskW, pm.maskH, imgW, imgH);
         if(result.polygons.length>0 && result.polygons[0].length>=6){
+          // Quality check: polygon vs mask bbox
+          var _pc2=result.polygons[0],_px0=Infinity,_px1=-Infinity,_py0=Infinity,_py1=-Infinity;
+          for(var _i2=0;_i2<_pc2.length;_i2+=2){if(_pc2[_i2]<_px0)_px0=_pc2[_i2];if(_pc2[_i2]>_px1)_px1=_pc2[_i2];if(_pc2[_i2+1]<_py0)_py0=_pc2[_i2+1];if(_pc2[_i2+1]>_py1)_py1=_pc2[_i2+1];}
+          var _pBA2=(_px1-_px0)*(_py1-_py0), _mBA2=result.bbox[2]*result.bbox[3];
+          if(_mBA2>100 && _pBA2<_mBA2*0.1){
+            // Polygon garbage — use RLE in segmentation field
+            const rle=maskToRLE(result.fullMask, imgW, imgH);
+            const ann={id:aid++, image_id:1, category_id:catId, instance_id:instanceId++,
+              segmentation:{counts:rle.counts, size:[imgH,imgW]},
+              bbox:result.bbox, area:result.area,
+              iscrowd:0, score:pm.score||1.0, method:'kpts_to_mask', ...regionMeta};
+            addInstanceAttrs(ann, pm.instance||1, instAttrs, attrs);
+            ann.rle_segmentation={counts:rle.counts, size:[imgH,imgW]};
+            anns.push(ann);
+          } else {
           const ann={id:aid++, image_id:1, category_id:catId, instance_id:instanceId++,
             segmentation:result.polygons, bbox:result.bbox, area:result.area,
             iscrowd:0, score:pm.score||1.0, method:'kpts_to_mask', ...regionMeta};
@@ -3673,6 +4974,7 @@ function exportCOCO(download=true){
           const rle=maskToRLE(result.fullMask, imgW, imgH);
           ann.rle_segmentation={counts:rle.counts, size:[imgH,imgW]};
           anns.push(ann);
+          }
         }
       }catch(e){console.warn('Polygon mask export error:',e)}
     });
@@ -3684,6 +4986,21 @@ function exportCOCO(download=true){
         if(!(mData instanceof Uint8Array)){const len=bm.maskW*bm.maskH;const arr=new Uint8Array(len);for(let i=0;i<len;i++)arr[i]=mData[i]?1:0;mData=arr}
         const result=maskToPolygon(mData, bm.maskW, bm.maskH, imgW, imgH);
         if(result.polygons.length>0 && result.polygons[0].length>=6){
+          // Quality check: polygon vs mask bbox
+          var _pc3=result.polygons[0],_px3=Infinity,_px4=-Infinity,_py3=Infinity,_py4=-Infinity;
+          for(var _i3=0;_i3<_pc3.length;_i3+=2){if(_pc3[_i3]<_px3)_px3=_pc3[_i3];if(_pc3[_i3]>_px4)_px4=_pc3[_i3];if(_pc3[_i3+1]<_py3)_py3=_pc3[_i3+1];if(_pc3[_i3+1]>_py4)_py4=_pc3[_i3+1];}
+          var _pBA3=(_px4-_px3)*(_py4-_py3), _mBA3=result.bbox[2]*result.bbox[3];
+          if(_mBA3>100 && _pBA3<_mBA3*0.1){
+            // Polygon garbage — use RLE in segmentation field
+            const rle=maskToRLE(result.fullMask, imgW, imgH);
+            const ann={id:aid++, image_id:1, category_id:catId, instance_id:instanceId++,
+              segmentation:{counts:rle.counts, size:[imgH,imgW]},
+              bbox:result.bbox, area:result.area,
+              iscrowd:0, score:bm.score||1.0, method:bm.origin||'brush', instance:bm.instance||1, ...regionMeta};
+            addInstanceAttrs(ann, bm.instance||1, instAttrs, attrs);
+            ann.rle_segmentation={counts:rle.counts, size:[imgH,imgW]};
+            anns.push(ann);
+          } else {
           const ann={id:aid++, image_id:1, category_id:catId, instance_id:instanceId++,
             segmentation:result.polygons, bbox:result.bbox, area:result.area,
             iscrowd:0, score:bm.score||1.0, method:bm.origin||'brush', instance:bm.instance||1, ...regionMeta};
@@ -3691,6 +5008,7 @@ function exportCOCO(download=true){
           const rle=maskToRLE(result.fullMask, imgW, imgH);
           ann.rle_segmentation={counts:rle.counts, size:[imgH,imgW]};
           anns.push(ann);
+          }
         }
       }catch(e){console.warn('Brush mask export error:',e)}
     });
@@ -3959,6 +5277,12 @@ function dl(content,mime,filename){const a=document.createElement('a');a.href=UR
 function importCOCO(json){
   try{
     const data=JSON.parse(json);
+    // --- INJECT OUR EXIF ALIGNMENT FIX HERE ---
+    // Magically rotate/scale the coordinates if it's a baked local image!
+    if (data.annotations) {
+        data.annotations = alignImportedAnnotations(data.annotations);
+    }
+    // ------------------------------------------
     if(data.annotations&&data.categories){
       // Load image if not already loaded (or update occurrence data)
       if(data.images&&data.images[0]){
@@ -3997,10 +5321,28 @@ function importCOCOData(data){
   const imgH=state.imgDims?.h||data.images?.[0]?.height||1;
 
   // Load correct template FIRST (before importing annotations)
-  if(data.info&&data.info.template){
-    var tp=data.info.template.split('/');
-    if(tp.length===2){state.templateGroupKey=tp[0];state.viewKey=tp[1];loadTemplate();}
-  }
+  //if(data.info&&data.info.template){
+    //var tp=data.info.template.split('/');
+    //if(tp.length===2){state.templateGroupKey=tp[0];state.viewKey=tp[1];loadTemplate();}
+  //}
+  // Load correct template FIRST (before importing annotations)
+    if(data.info){
+      // 1. Check for the NEW Enhanced JSON format
+      if(data.info.template_group && data.info.template_view){
+        state.templateGroupKey = data.info.template_group;
+        state.viewKey = data.info.template_view;
+        loadTemplate();
+      } 
+      // 2. Fallback to the OLD JSON format
+      else if(data.info.template){
+        var tp = data.info.template.split('/');
+        if(tp.length === 2){
+          state.templateGroupKey = tp[0];
+          state.viewKey = tp[1];
+          loadTemplate();
+        }
+      }
+    }
   // Also check categories for supercategory as template hint
   if(data.categories?.[0]?.supercategory&&!data.info?.template){
     var sc=data.categories[0].supercategory;
@@ -4011,10 +5353,37 @@ function importCOCOData(data){
     }
   }
 
-  data.categories.forEach(cat=>{
-    const r=state.regions.find(r=>r.id===cat.name||r.label===cat.label||r.label===cat.name);
-    if(!r)return;
-    data.annotations.filter(a=>a.category_id===cat.id).forEach(a=>{
+  //data.categories.forEach(cat=>{
+    //const r=state.regions.find(r=>r.id===cat.name||r.label===cat.label||r.label===cat.name);
+    //if(!r)return;
+    //data.annotations.filter(a=>a.category_id===cat.id).forEach(a=>{
+    data.categories.forEach(cat=>{
+        // 1. Clean the incoming JSON category name
+        const cName = String(cat.name || cat.label || '').toLowerCase().trim();
+        
+        // 2. Slash-Aware Region Matching
+        const r = state.regions.find(r => {
+            // Get all possible names for this region in the template
+            const regionStrings = [
+                String(r.id || '').toLowerCase(),
+                String(r.label || '').toLowerCase(),
+                String(r.name || '').toLowerCase()
+            ];
+
+            // Check if cName perfectly matches the full string OR any slash-separated part
+            return regionStrings.some(str => 
+                str === cName || 
+                str.split('/').map(s => s.trim()).includes(cName)
+            );
+        });
+        
+        if(!r) {
+            console.warn("Skipping COCO category because region not found in template:", cat.name);
+            return;
+        }
+
+        // 3. Bulletproof ID Matching
+        data.annotations.filter(a => String(a.category_id) === String(cat.id)).forEach(a => {
       const inst=a.instance||1;
       // Bbox
       if(a.bbox&&a.bbox.length===4&&!a.segmentation){
@@ -4044,16 +5413,32 @@ function importCOCOData(data){
         }catch(e){console.warn('RLE decode error:',e)}
       }
       // Polygon segmentation (array of [x,y,x,y,...] arrays)
-      if(a.segmentation&&Array.isArray(a.segmentation)&&a.segmentation.length>0&&!rleData){
+      if(a.segmentation&&Array.isArray(a.segmentation)&&a.segmentation.length>0&&!rleData&&!a.is_line){
         try{
           // Rasterize polygon to mask
-          const mW=Math.min(imgW,512),mH=Math.min(imgH,512);
+          // FIX: GUI JSON leaves 'images' empty, forcing imgW to 1.
+          // Pull true dimensions directly from the loaded image state!
+          const trueW = state.rawImageWidth || state.img?.naturalWidth || state.img?.width || imgW || 512;
+          const trueH = state.rawImageHeight || state.img?.naturalHeight || state.img?.height || imgH || 512;
+          
+          const mW=Math.min(trueW,512), mH=Math.min(trueH,512);
           const mask=new Uint8Array(mW*mH);
+          
           a.segmentation.forEach(poly=>{
             if(!Array.isArray(poly)||poly.length<6)return;
             // Scale polygon to mask coords and scanline fill
             const pts=[];
-            for(let pi=0;pi<poly.length;pi+=2) pts.push({x:poly[pi]*mW/imgW,y:poly[pi+1]*mH/imgH});
+            for(let pi=0;pi<poly.length;pi+=2) pts.push({x: poly[pi] * mW / trueW, y: poly[pi+1] * mH / trueH});
+        //try{
+          // Rasterize polygon to mask
+          
+          //const mW=Math.min(imgW,512),mH=Math.min(imgH,512);
+          //const mask=new Uint8Array(mW*mH);
+          //a.segmentation.forEach(poly=>{
+            //if(!Array.isArray(poly)||poly.length<6)return;
+            // Scale polygon to mask coords and scanline fill
+            //const pts=[];
+            //for(let pi=0;pi<poly.length;pi+=2) pts.push({x:poly[pi]*mW/imgW,y:poly[pi+1]*mH/imgH});
             for(let y=0;y<mH;y++){
               const crossings=[];
               for(let j=0;j<pts.length;j++){
@@ -4206,10 +5591,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(!SAM2.apiBase){showToast('Server not connected');return}
     window.location.href=SAM2.apiBase+'/auth/gbif?redirect='+encodeURIComponent(window.location.href);
   });
-  $('oauth-inat').addEventListener('click',()=>{
-    if(!SAM2.apiBase){showToast('Server not connected');return}
-    window.location.href=SAM2.apiBase+'/auth/inat?redirect='+encodeURIComponent(window.location.href);
-  });
+  // iNat uses client-side PKCE flow via inline onclick="loginWithInaturalist()" on the button
+  // (server-side OAuth handler removed to avoid conflict)
 
   // Handle OAuth callback (URL has ?auth_token=...&auth_user=...&auth_provider=...)
   const urlParams=new URLSearchParams(window.location.search);
@@ -4346,17 +5729,48 @@ document.addEventListener('DOMContentLoaded',()=>{
 
   async function sync() {
     const today = new Date().toISOString().split('T')[0];
-    try {
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 4000);
-      let data = await fetch(DB_URL, { signal: controller.signal })
-        .then(r => r.json())
-        .catch(() => ({ total: 1, countries: {"DE":1}, points: [{lat:52.5,lon:13.4}], daily:{} }));
-      clearTimeout(tid);
-      if(!data.daily) data.daily={};
+    const LS_KEY = 'dsc_visitor_data';
+    
+    // Load local fallback data (persists even if remote fails)
+    var localData;
+    try { localData = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch(e) { localData = null; }
+    if(!localData) localData = { total: 0, countries: {}, points: [], daily: {} };
+    if(!localData.daily) localData.daily = {};
 
+    try {
+      // 1. Try to GET remote data
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 5000);
+      var remoteData = null;
+      try {
+        var resp = await fetch(DB_URL, { signal: controller.signal });
+        clearTimeout(tid);
+        if(resp.ok) {
+          var txt = await resp.text();
+          try { remoteData = JSON.parse(txt); } catch(pe) { console.warn('Visitor DB: response not JSON:', txt.substring(0, 100)); }
+        } else {
+          console.warn('Visitor DB GET status:', resp.status);
+        }
+      } catch(fetchErr) {
+        clearTimeout(tid);
+        console.warn('Visitor DB GET failed:', fetchErr.message);
+      }
+
+      // 2. Merge: use remote if available and has higher total, else use local
+      var data;
+      if(remoteData && typeof remoteData.total === 'number') {
+        if(!remoteData.daily) remoteData.daily = {};
+        if(!remoteData.points) remoteData.points = [];
+        if(!remoteData.countries) remoteData.countries = {};
+        // Use whichever has more data
+        data = (remoteData.total >= localData.total) ? remoteData : localData;
+      } else {
+        data = localData;
+      }
+
+      // 3. Track new visit (once per day per browser)
       if (localStorage.getItem('dsc_v_day') !== today) {
-        try{
+        try {
           const geo = await (await fetch('https://ipapi.co/json/')).json();
           data.total = (data.total || 0) + 1;
           data.countries[geo.country_code] = (data.countries[geo.country_code] || 0) + 1;
@@ -4365,15 +5779,35 @@ document.addEventListener('DOMContentLoaded',()=>{
           data.points.push({ lat: jLat, lon: jLon, cc: geo.country_code });
           if(data.points.length > 200) data.points = data.points.slice(-200);
           data.daily[today] = (data.daily[today]||0) + 1;
-          const keys = Object.keys(data.daily).sort();
-          if(keys.length>30) keys.slice(0,keys.length-30).forEach(k=>delete data.daily[k]);
-          await fetch(DB_URL, { method: 'POST', body: JSON.stringify(data) }).catch(()=>{});
+          // Prune old daily entries
+          const dkeys = Object.keys(data.daily).sort();
+          if(dkeys.length>30) dkeys.slice(0,dkeys.length-30).forEach(k=>delete data.daily[k]);
+
+          // 4. Save to remote with proper headers
+          try {
+            var putResp = await fetch(DB_URL, { 
+              method: 'PUT', 
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data) 
+            });
+            if(putResp.ok) {
+              console.log('Visitor DB saved remotely. Total:', data.total);
+            } else {
+              console.warn('Visitor DB PUT failed:', putResp.status);
+            }
+          } catch(putErr) { console.warn('Visitor DB PUT error:', putErr.message); }
+
           localStorage.setItem('dsc_v_day', today);
-        } catch(geoErr){ console.warn('Geo lookup failed:', geoErr); }
+        } catch(geoErr) { console.warn('Geo lookup failed:', geoErr); }
       }
+
+      // 5. Always save to localStorage as fallback
+      try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch(e) {}
+
       return data;
     } catch(e) { 
-      return { total: 1, countries: {"Local":1}, points: [{lat:20,lon:10}], daily:{} }; 
+      console.warn('Visitor sync error:', e);
+      return localData; 
     }
   }
 
@@ -4542,8 +5976,13 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(annotator.name)showToast('Welcome, '+annotator.name+'!');
   });
   $('login-clear').addEventListener('click',function(){
-    annotator={name:'',orcid:'',institution:''};
+    annotator={name:'',orcid:'',institution:'',inat_login:'',inat_id:null,provider:''};
     saveAnnotator();
+    // Also clear iNat session
+    localStorage.removeItem('inat_user');
+    localStorage.removeItem('inat_code_verifier');
+    var inatBtn=document.getElementById('oauth-inat');
+    if(inatBtn){inatBtn.innerHTML='🦋 iNaturalist';inatBtn.style.background='#74ac00';inatBtn.title='Sign in with your iNaturalist account';}
     $('login-popup').classList.remove('show');
     showToast('Annotator cleared');
   });
