@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Descriptron × GBIF — Web Morphology Annotator</title>
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.all.min.js"></script>
+<!-- onnxruntime-web served from our own origin so it works behind CDN-blocking firewalls; falls back to the public CDN if the same-origin copy is unavailable (e.g. opened as a local file). -->
+<script src="/static/ort/ort.all.min.js" onerror="this.onerror=null;var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.all.min.js';s.async=false;document.head.appendChild(s);"></script>
 <script type="importmap">
 {"imports":{"phenomenon":"https://cdn.jsdelivr.net/npm/phenomenon@1.6.0/dist/phenomenon.esm.js"}}
 </script>
@@ -287,11 +288,11 @@
     <span style="font-size:20px">🔬</span>
     <div>
       <div class="header-title">DESCRIPTRON <span>× GBIF</span></div>
-      <div class="header-sub">Web Morphology Annotator · MfN Berlin</div>
+      <div class="header-sub">Web Morphology Annotator · MfN Berlin · <span id="build-stamp" title="Build currently loaded in your browser — if this is older than expected, force-reload the page">build 0730-1342</span></div>
     </div>
   </div>
   <div class="header-right" style="display:flex;align-items:center;gap:12px">
-    <button class="globe-btn" id="visit-btn" title="Visitor Statistics">🌍</button>
+    <button class="globe-btn" id="visit-btn" title="Usage statistics">📊</button>
     <div id="specimen-info" style="display:none;text-align:right">
       <div class="header-species" id="specimen-name"></div>
       <div class="header-meta" id="specimen-meta"></div>
@@ -470,31 +471,22 @@
 
 <div class="ctx-menu" id="ctx-menu"></div>
 <div class="zenodo-modal-bg" id="visit-modal-bg">
-  <div class="zenodo-modal" style="width: 520px; max-width: 95vw; background: #fff; border-radius: 12px; padding: 22px;">
-    <h3 style="display:flex; align-items:center; gap:8px; color:#1a1a1a; margin-bottom:2px">🌍 Descriptron Global Network</h3>
-    <p style="font-size:11px; color:#888; margin-bottom:14px">Visitor activity across the world</p>
-    
-    <div id="world-map-container">
-      <span class="globe-loading" id="globe-loading">Loading globe...</span>
-      <canvas id="globe-canvas" width="600" height="600"></canvas>
+  <div class="zenodo-modal" style="width: 580px; max-width: 95vw; background: #fff; border-radius: 12px; padding: 22px;">
+    <h3 style="display:flex; align-items:center; gap:8px; color:#1a1a1a; margin-bottom:2px">📊 Descriptron‑GBIF Annotator — Usage</h3>
+    <p style="font-size:11px; color:#888; margin-bottom:14px">Live activity logged by the tool since public launch</p>
+
+    <div class="visit-stats-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:16px">
+      <div class="stat-card"><div class="stat-val" id="stat-total-v">···</div><div class="stat-lbl">Total events</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-seg-v">···</div><div class="stat-lbl">AI segmentations</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-gbif-v">···</div><div class="stat-lbl">GBIF specimens</div></div>
+      <div class="stat-card"><div class="stat-val" id="stat-exp-v">···</div><div class="stat-lbl">Exports</div></div>
     </div>
 
-    <div class="visit-stats-grid">
-      <div class="stat-card">
-        <div class="stat-val" id="stat-total-v">0</div>
-        <div class="stat-lbl">Total Visits</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-val" id="stat-countries-v">0</div>
-        <div class="stat-lbl">Countries</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-val" id="stat-today-v">0</div>
-        <div class="stat-lbl">Today</div>
-      </div>
-    </div>
+    <div style="font-size:11px; font-weight:600; color:#555; margin-bottom:5px">Daily activity</div>
+    <div id="usage-chart" style="height:110px; margin-bottom:16px; color:#999; font-size:11px">Loading…</div>
 
-    <div class="country-list" id="visit-country-list"></div>
+    <div style="font-size:11px; font-weight:600; color:#555; margin-bottom:6px">By workflow stage</div>
+    <div id="usage-breakdown"></div>
 
     <div class="zm-row" style="margin-top:16px">
       <button class="zm-btn secondary" id="visit-close" style="flex:1; font-weight:500">Close</button>
@@ -507,6 +499,22 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 const INAT_CLIENT_ID = 'gz_zrvHCbM2qH7nCudARxrH5sqja-BrjyndEKuokTUo';
 const INAT_REDIRECT_URI = 'https://www.descriptrongbifannotator.org/';
+
+// Canonical host = the host registered with iNaturalist for the OAuth redirect URI.
+// The app is reachable at both the apex (descriptrongbifannotator.org) and www hosts, but
+// iNaturalist requires the redirect_uri to match EXACTLY. Because the PKCE verifier is kept
+// in per-origin localStorage, starting login on the apex host and being redirected back to
+// www loses the verifier and the login silently fails. Redirect the apex host to the canonical
+// www host up front so there is a single origin. No-op for localhost, file://, or any other host.
+const INAT_CANONICAL_HOST = new URL(INAT_REDIRECT_URI).hostname;
+(function canonicalizeHost() {
+  try {
+    const h = location.hostname;
+    if (h && h !== INAT_CANONICAL_HOST && INAT_CANONICAL_HOST.endsWith('.' + h)) {
+      location.replace('https://' + INAT_CANONICAL_HOST + location.pathname + location.search + location.hash);
+    }
+  } catch (e) { /* non-fatal: fall through and run on the current host */ }
+})();
 
 // 1. PKCE Helpers for secure browser-based authentication
 async function generateCodeChallenge(verifier) {
@@ -2461,33 +2469,56 @@ const SAM2={
   async loadDecoder(){
     if (this.session) return;
 
-    setSamStatus('encoding','Loading ONNX decoder...');
-    try{
-      // Ensure ORT can find its WASM binaries
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
-      // Avoid COOP/COEP + SharedArrayBuffer requirements
-      ort.env.wasm.numThreads = 1;
+    // onnxruntime-web fetches its WASM runtime from wasmPaths. We serve an exact copy of the
+    // 1.20.0 runtime from our own origin (/static/ort/) so segmentation works even where a
+    // corporate firewall / antivirus blocks third-party CDNs; the public CDN is a fallback.
+    const ORT_WASM_SAMEORIGIN = this.apiBase + '/static/ort/';
+    const ORT_WASM_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
 
-      // NOTE: ORT Web commonly uses "cpu" here (WASM backend)
-      this.session = await ort.InferenceSession.create(
-        this.apiBase + '/onnx/decoder.onnx',
-        { executionProviders: ['cpu'] }
-      );
+    // If the ORT library itself never loaded, quietly use the server-side decoder path.
+    if (typeof ort === 'undefined') { this.decoderInstruction(); return; }
 
-      this.ready = true;
-      setSamStatus('ready','Decoder ready — draw prompts & click Segment');
-      $('segment-btn').disabled = false;
-      showToast('SAM2.1 decoder loaded');
-    }catch(e){
-      console.error('ONNX load failed:', e);
-      this.ready = false;
-      this.session = null;
-      $('segment-btn').disabled = true;
+    setSamStatus('encoding','Loading segmentation model...');
+    ort.env.wasm.numThreads = 1;      // avoid COOP/COEP + SharedArrayBuffer requirements
+    ort.env.wasm.simd = true;
 
-      const msg = (e && e.message !== undefined) ? e.message : String(e);
-      setSamStatus('off','ONNX decoder failed: ' + msg);
-      showToast('ONNX decoder failed — check console');
+    // Download the decoder model ourselves so a failure is a clear JS error, not an opaque abort.
+    let modelBytes;
+    try {
+      const resp = await fetch(this.apiBase + '/onnx/decoder.onnx', { cache: 'force-cache' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching decoder.onnx');
+      modelBytes = new Uint8Array(await resp.arrayBuffer());
+    } catch (e) {
+      console.warn('SAM2 decoder model download failed; using server-side decoding.', e);
+      this.decoderInstruction();
+      return;
     }
+
+    // Create the session: same-origin runtime first, CDN as fallback. Prompts run on WASM.
+    for (const wasmPath of [ORT_WASM_SAMEORIGIN, ORT_WASM_CDN]) {
+      ort.env.wasm.wasmPaths = wasmPath;
+      try {
+        this.session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] });
+        this.ready = true;
+        setSamStatus('ready','Draw a point or box on a region, then click Segment');
+        $('segment-btn').disabled = false;
+        return;
+      } catch (e) {
+        console.warn(`SAM2 decoder init failed (runtime=${wasmPath}); trying next source.`, e);
+      }
+    }
+
+    // In-browser decoder unavailable — segmentation still works via the server /decode endpoint.
+    console.warn('SAM2 browser decoder unavailable; falling back to server-side decoding.');
+    this.decoderInstruction();
+  },
+
+  // Neutral, user-facing status when the in-browser decoder isn't active. Segmentation still
+  // works (the backend decodes on request), so we show how to use it rather than an error.
+  decoderInstruction(){
+    this.ready = false;
+    this.session = null;
+    setSamStatus('ready','Highlight a region first to use SAM2');
   },
 
   getProxyUrl(url){return this.apiBase+'/proxy-image?url='+encodeURIComponent(url)},
@@ -5696,265 +5727,78 @@ document.addEventListener('DOMContentLoaded',()=>{
 
   // Login popup
   loadAnnotator();
-(function() {
-  const DB_URL = 'https://kvdb.io/S3VzNEn3K7v2vR3K9z9z9z/descriptron_globe_v5';
-  var _globeInstance = null;
-  var _globeMarkers = [];
-  var _globePhi = 0;
+(function(){
+  // ── Usage dashboard: real server-side stats from /api/usage-stats ──
+  // (Replaces the former visitor globe, which depended on a now-defunct
+  //  public kvdb.io bucket + ipapi.co + a CDN globe and showed no real data.)
+  var apiBase = window.location.origin;
+  var STAGE = [
+    ['page_view','Sessions opened','#9e9e9e'],
+    ['template_change','Template / view selections','#9e9e9e'],
+    ['load_gbif','Specimens loaded (GBIF)','#9e9e9e'],
+    ['load_zenodo','Specimens loaded (Zenodo)','#9e9e9e'],
+    ['load_upload','Specimens loaded (upload)','#9e9e9e'],
+    ['load_dwc_multimedia','Specimens loaded (DwC)','#9e9e9e'],
+    ['segment','AI segmentations (SAM2)','#509E2F'],
+    ['export_coco','Exports — COCO','#1976d2'],
+    ['export_csv','Exports — traits CSV','#1976d2'],
+    ['export_dwc','Exports — Darwin Core','#1976d2'],
+    ['export_kg','Exports — knowledge graph','#1976d2'],
+    ['zenodo_upload','Published to Zenodo','#1976d2']
+  ];
+  function fmt(n){ return (typeof n==='number') ? n.toLocaleString() : n; }
 
-  // ── Country code → name + flag lookup ──
-  const CC = {
-    AF:"Afghanistan",AL:"Albania",DZ:"Algeria",AR:"Argentina",AM:"Armenia",AU:"Australia",AT:"Austria",
-    AZ:"Azerbaijan",BD:"Bangladesh",BY:"Belarus",BE:"Belgium",BO:"Bolivia",BA:"Bosnia and Herzegovina",
-    BR:"Brazil",BG:"Bulgaria",KH:"Cambodia",CM:"Cameroon",CA:"Canada",CL:"Chile",CN:"China",
-    CO:"Colombia",CR:"Costa Rica",HR:"Croatia",CU:"Cuba",CZ:"Czechia",DK:"Denmark",DO:"Dominican Republic",
-    EC:"Ecuador",EG:"Egypt",SV:"El Salvador",EE:"Estonia",ET:"Ethiopia",FI:"Finland",FR:"France",
-    GE:"Georgia",DE:"Germany",GH:"Ghana",GR:"Greece",GT:"Guatemala",HN:"Honduras",HK:"Hong Kong",
-    HU:"Hungary",IS:"Iceland",IN:"India",ID:"Indonesia",IR:"Iran",IQ:"Iraq",IE:"Ireland",IL:"Israel",
-    IT:"Italy",JM:"Jamaica",JP:"Japan",JO:"Jordan",KZ:"Kazakhstan",KE:"Kenya",KR:"South Korea",
-    KW:"Kuwait",LV:"Latvia",LB:"Lebanon",LT:"Lithuania",LU:"Luxembourg",MY:"Malaysia",MX:"Mexico",
-    MA:"Morocco",MZ:"Mozambique",MM:"Myanmar",NP:"Nepal",NL:"Netherlands",NZ:"New Zealand",NG:"Nigeria",
-    NO:"Norway",PK:"Pakistan",PA:"Panama",PY:"Paraguay",PE:"Peru",PH:"Philippines",PL:"Poland",
-    PT:"Portugal",QA:"Qatar",RO:"Romania",RU:"Russia",SA:"Saudi Arabia",RS:"Serbia",SG:"Singapore",
-    SK:"Slovakia",SI:"Slovenia",ZA:"South Africa",ES:"Spain",LK:"Sri Lanka",SE:"Sweden",CH:"Switzerland",
-    TW:"Taiwan",TZ:"Tanzania",TH:"Thailand",TN:"Tunisia",TR:"Turkey",UA:"Ukraine",AE:"UAE",
-    GB:"United Kingdom",US:"United States",UY:"Uruguay",UZ:"Uzbekistan",VE:"Venezuela",VN:"Vietnam",
-    ZM:"Zambia",ZW:"Zimbabwe"
-  };
-  function countryFlag(code){ 
-    if(!code||code.length!==2) return '🏳️';
-    return String.fromCodePoint(...[...code.toUpperCase()].map(c=>0x1F1E6+c.charCodeAt(0)-65));
-  }
-  function countryName(code){ return CC[code]||code; }
-
-  async function sync() {
-    const today = new Date().toISOString().split('T')[0];
-    const LS_KEY = 'dsc_visitor_data';
-    
-    // Load local fallback data (persists even if remote fails)
-    var localData;
-    try { localData = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch(e) { localData = null; }
-    if(!localData) localData = { total: 0, countries: {}, points: [], daily: {} };
-    if(!localData.daily) localData.daily = {};
-
-    try {
-      // 1. Try to GET remote data
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 5000);
-      var remoteData = null;
-      try {
-        var resp = await fetch(DB_URL, { signal: controller.signal });
-        clearTimeout(tid);
-        if(resp.ok) {
-          var txt = await resp.text();
-          try { remoteData = JSON.parse(txt); } catch(pe) { console.warn('Visitor DB: response not JSON:', txt.substring(0, 100)); }
-        } else {
-          console.warn('Visitor DB GET status:', resp.status);
-        }
-      } catch(fetchErr) {
-        clearTimeout(tid);
-        console.warn('Visitor DB GET failed:', fetchErr.message);
-      }
-
-      // 2. Merge: use remote if available and has higher total, else use local
-      var data;
-      if(remoteData && typeof remoteData.total === 'number') {
-        if(!remoteData.daily) remoteData.daily = {};
-        if(!remoteData.points) remoteData.points = [];
-        if(!remoteData.countries) remoteData.countries = {};
-        // Use whichever has more data
-        data = (remoteData.total >= localData.total) ? remoteData : localData;
-      } else {
-        data = localData;
-      }
-
-      // 3. Track new visit (once per day per browser)
-      if (localStorage.getItem('dsc_v_day') !== today) {
-        try {
-          const geo = await (await fetch('https://ipapi.co/json/')).json();
-          data.total = (data.total || 0) + 1;
-          data.countries[geo.country_code] = (data.countries[geo.country_code] || 0) + 1;
-          const jLat = geo.latitude + (Math.random()-0.5)*2;
-          const jLon = geo.longitude + (Math.random()-0.5)*2;
-          data.points.push({ lat: jLat, lon: jLon, cc: geo.country_code });
-          if(data.points.length > 200) data.points = data.points.slice(-200);
-          data.daily[today] = (data.daily[today]||0) + 1;
-          // Prune old daily entries
-          const dkeys = Object.keys(data.daily).sort();
-          if(dkeys.length>30) dkeys.slice(0,dkeys.length-30).forEach(k=>delete data.daily[k]);
-
-          // 4. Save to remote with proper headers
-          try {
-            var putResp = await fetch(DB_URL, { 
-              method: 'PUT', 
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data) 
-            });
-            if(putResp.ok) {
-              console.log('Visitor DB saved remotely. Total:', data.total);
-            } else {
-              console.warn('Visitor DB PUT failed:', putResp.status);
-            }
-          } catch(putErr) { console.warn('Visitor DB PUT error:', putErr.message); }
-
-          localStorage.setItem('dsc_v_day', today);
-        } catch(geoErr) { console.warn('Geo lookup failed:', geoErr); }
-      }
-
-      // 5. Always save to localStorage as fallback
-      try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch(e) {}
-
-      return data;
-    } catch(e) { 
-      console.warn('Visitor sync error:', e);
-      return localData; 
-    }
-  }
-
-  async function initGlobe(markers) {
-    if(_globeInstance) { _globeInstance.destroy(); _globeInstance = null; }
-    var canvas = document.getElementById('globe-canvas');
-    var loadEl = document.getElementById('globe-loading');
-    if(!canvas) return;
-
-    // Dynamically import cobe on first use
-    if(!window._createGlobe) {
-      try {
-        if(loadEl) { loadEl.style.display = ''; loadEl.textContent = 'Loading globe...'; }
-        var mod = await import('https://cdn.jsdelivr.net/npm/cobe@0.6.3/dist/index.esm.js');
-        window._createGlobe = mod.default;
-      } catch(e) {
-        console.warn('Cobe globe failed to load:', e);
-        // Fallback: draw a simple SVG globe
-        if(loadEl) loadEl.style.display = 'none';
-        canvas.style.display = 'none';
-        drawFallbackMap(markers);
-        return;
-      }
-    }
-
-    if(loadEl) loadEl.style.display = 'none';
-    canvas.style.display = '';
-    // Remove fallback if cobe works this time
-    var oldFb = document.querySelector('.fallback-map');
-    if(oldFb) oldFb.remove();
-
-    // Convert lat/lon points to cobe marker format
-    var cobeMarkers = (markers||[]).map(function(p){
-      return { location: [p.lat, p.lon], size: 0.04 };
-    });
-
-    _globePhi = 0;
-    try {
-      _globeInstance = window._createGlobe(canvas, {
-        devicePixelRatio: 2,
-        width: 600,
-        height: 600,
-        phi: 0,
-        theta: 0.15,
-        dark: 1,
-        diffuse: 1.4,
-        mapSamples: 20000,
-        mapBrightness: 4,
-        baseColor: [0.15, 0.25, 0.4],
-        markerColor: [0.31, 0.62, 0.18],
-        glowColor: [0.05, 0.12, 0.08],
-        markers: cobeMarkers,
-        onRender: function(state) {
-          state.phi = _globePhi;
-          _globePhi += 0.003;
-        }
-      });
-    } catch(glErr) {
-      console.warn('WebGL globe init failed:', glErr);
-      canvas.style.display = 'none';
-      drawFallbackMap(markers);
-    }
-  }
-
-  // Fallback flat map when WebGL/cobe is unavailable
-  function drawFallbackMap(markers) {
-    var container = document.getElementById('world-map-container');
-    // Remove any previous fallback SVG but keep canvas hidden
-    var oldFb = container.querySelector('.fallback-map');
-    if(oldFb) oldFb.remove();
-
-    var LAND = [
-      "M115,88 L155,60 L210,65 L260,72 L300,115 L265,115 L250,155 L235,162 L215,145 L180,135 L140,115 L115,88Z",
-      "M270,238 L340,232 L375,275 L365,330 L315,395 L278,345 L262,258 L270,238Z",
-      "M470,95 L530,80 L555,85 L555,105 L528,118 L498,132 L480,125 L470,120 L468,100 L470,95Z",
-      "M468,170 L528,158 L578,178 L575,218 L558,255 L530,318 L500,340 L480,285 L462,208 L468,170Z",
-      "M560,95 L650,72 L770,60 L870,75 L865,102 L790,105 L690,90 L620,105 L565,100 L560,95Z",
-      "M630,155 L695,170 L695,200 L665,230 L638,188 L630,155Z",
-      "M730,98 L790,118 L790,142 L760,162 L735,140 L728,108 L730,98Z",
-      "M810,305 L875,295 L895,320 L862,355 L830,352 L808,315 L810,305Z"
-    ];
-    function lonX(lon){ return (lon+180)/360*1000; }
-    function latY(lat){ return (90-lat)/180*500; }
-    var svg = '<svg viewBox="0 0 1000 500" style="width:100%;height:100%" xmlns="http://www.w3.org/2000/svg">';
-    svg += '<rect width="1000" height="500" fill="#0a1628"/>';
-    for(var glon=-150;glon<=180;glon+=30){ var gx=lonX(glon); svg+='<line x1="'+gx+'" y1="0" x2="'+gx+'" y2="500" stroke="#1a2a44" stroke-width="0.3"/>'; }
-    for(var glat=-60;glat<=90;glat+=30){ var gy=latY(glat); svg+='<line x1="0" y1="'+gy+'" x2="1000" y2="'+gy+'" stroke="#1a2a44" stroke-width="0.3"/>'; }
-    LAND.forEach(function(p){ svg += '<path d="'+p+'" fill="#1e3a5f" stroke="#2a5080" stroke-width="0.4"/>'; });
-    (markers||[]).forEach(function(p,i){
-      var x = lonX(p.lon), y = latY(p.lat);
-      if(x<5||x>995||y<5||y>495) return;
-      svg += '<circle cx="'+x+'" cy="'+y+'" r="3" fill="#4ade80" opacity="0.8"/>';
-      if(i >= markers.length-5) svg += '<circle cx="'+x+'" cy="'+y+'" r="5" fill="none" stroke="#4ade80" stroke-width="0.5" opacity="0.4"/>';
-    });
-    svg += '</svg>';
-    var div = document.createElement('div');
-    div.className = 'fallback-map';
-    div.style.cssText = 'width:100%;height:100%;position:absolute;top:0;left:0';
-    div.innerHTML = svg;
-    container.appendChild(div);
-  }
-
-  function updateStats(data) {
-    var total = data.total || 0;
-    var countries = data.countries || {};
-    var daily = data.daily || {};
-    var today = new Date().toISOString().split('T')[0];
-
-    document.getElementById('stat-total-v').textContent = typeof total==='number' ? total.toLocaleString() : total;
-    document.getElementById('stat-countries-v').textContent = Object.keys(countries).length;
-    document.getElementById('stat-today-v').textContent = (daily[today]||0).toLocaleString();
-
-    var maxVisits = Math.max(1, ...Object.values(countries));
-    var sorted = Object.entries(countries).sort(function(a,b){return b[1]-a[1];});
-    var listHtml = sorted.map(function(entry){
-      var code = entry[0], count = entry[1];
-      var pct = Math.round(count/maxVisits*100);
-      return '<div class="country-row">'+
-        '<div class="cr-name"><span class="cr-flag">'+countryFlag(code)+'</span>'+countryName(code)+'</div>'+
-        '<div style="text-align:right"><span class="cr-count">'+count+'</span>'+
-        '<div class="cr-bar" style="width:'+pct+'px"></div></div></div>';
+  function renderChart(daily){
+    var el=document.getElementById('usage-chart'); if(!el) return;
+    var keys=Object.keys(daily||{}).sort();
+    if(!keys.length){ el.innerHTML='<div style="color:#999;text-align:center;padding:24px">No activity recorded yet</div>'; return; }
+    var max=Math.max.apply(null, keys.map(function(k){return daily[k];}))||1;
+    var n=keys.length, W=1000, H=110, bw=W/n;
+    var bars=keys.map(function(k,i){
+      var h=Math.max(1, Math.round(daily[k]/max*(H-16))), x=i*bw;
+      return '<rect x="'+(x+bw*0.12).toFixed(1)+'" y="'+(H-h-2)+'" width="'+(bw*0.76).toFixed(1)+'" height="'+h+'" fill="#509E2F" rx="1"><title>'+k+': '+daily[k]+'</title></rect>';
     }).join('');
-    document.getElementById('visit-country-list').innerHTML = listHtml || '<div style="padding:12px;color:#999;text-align:center">No visitors recorded yet</div>';
+    el.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" style="width:100%;height:100%;display:block">'+bars+'</svg>'+
+      '<div style="display:flex;justify-content:space-between;font-size:9px;color:#aaa;margin-top:3px"><span>'+keys[0]+'</span><span>'+keys[n-1]+'</span></div>';
   }
 
-  document.getElementById('visit-btn').onclick = async function() {
-    document.getElementById('visit-modal-bg').classList.add('show');
-    updateStats({ total: '···', countries: {}, points: [], daily:{} });
+  function renderBreakdown(bt){
+    var el=document.getElementById('usage-breakdown'); if(!el) return;
+    var rows=STAGE.filter(function(s){return (bt[s[0]]||0)>0;});
+    var max=Math.max.apply(null, rows.map(function(s){return bt[s[0]];}).concat([1]));
+    el.innerHTML=rows.map(function(s){
+      var v=bt[s[0]], pct=Math.round(v/max*100);
+      return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;font-size:11px">'+
+        '<div style="flex:0 0 190px;color:#555">'+s[1]+'</div>'+
+        '<div style="flex:1;background:#eee;border-radius:3px;height:12px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+s[2]+'"></div></div>'+
+        '<div style="flex:0 0 46px;text-align:right;font-weight:600;color:#333">'+fmt(v)+'</div></div>';
+    }).join('');
+  }
 
-    var d = await sync();
-    updateStats(d);
-    await initGlobe(d.points || []);
-  };
-
-  document.getElementById('visit-close').onclick = function(){ 
-    document.getElementById('visit-modal-bg').classList.remove('show');
-    if(_globeInstance) { _globeInstance.destroy(); _globeInstance = null; }
-  };
-  document.getElementById('visit-modal-bg').addEventListener('click', function(e){ 
-    if(e.target===this) {
-      this.classList.remove('show');
-      if(_globeInstance) { _globeInstance.destroy(); _globeInstance = null; }
+  async function loadUsage(){
+    try{
+      var r=await fetch(apiBase+'/api/usage-stats',{signal:AbortSignal.timeout(8000)});
+      var d=await r.json();
+      var bt=d.events_by_type||{};
+      document.getElementById('stat-total-v').textContent=fmt(d.total_events||0);
+      document.getElementById('stat-seg-v').textContent=fmt(bt.segment||0);
+      document.getElementById('stat-gbif-v').textContent=fmt(bt.load_gbif||0);
+      var exp=['export_coco','export_csv','export_dwc','export_kg','zenodo_upload'].reduce(function(a,k){return a+(bt[k]||0);},0);
+      document.getElementById('stat-exp-v').textContent=fmt(exp);
+      renderChart(d.daily_events||{});
+      renderBreakdown(bt);
+    }catch(e){
+      console.warn('usage-stats fetch failed', e);
+      var el=document.getElementById('usage-chart'); if(el) el.innerHTML='<div style="color:#999;text-align:center;padding:24px">Usage data unavailable right now</div>';
     }
-  });
-  
-  // Initial background sync (no globe rendering, just data fetch)
-  sync();
+  }
+
+  var vb=document.getElementById('visit-btn');
+  if(vb) vb.onclick=function(){ document.getElementById('visit-modal-bg').classList.add('show'); loadUsage(); };
+  var vc=document.getElementById('visit-close');
+  if(vc) vc.onclick=function(){ document.getElementById('visit-modal-bg').classList.remove('show'); };
+  var bgm=document.getElementById('visit-modal-bg');
+  if(bgm) bgm.addEventListener('click', function(e){ if(e.target===this) this.classList.remove('show'); });
 })();
   $('login-btn').addEventListener('click',function(e){
     e.stopPropagation();
@@ -6187,6 +6031,361 @@ document.addEventListener('DOMContentLoaded',()=>{
     <div class="zm-status" id="zm-status"></div>
   </div>
 </div>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     FIRST-RUN GUIDED TOUR / WORKED EXAMPLE  (self-contained, removable block)
+     Shows a welcome popup on first visit; spotlights each real control in turn.
+     Replayable anytime via the "❓ Tour" button injected into the header.
+     ═══════════════════════════════════════════════════════════════════════ -->
+<script>
+(function(){
+  var SEEN_KEY = 'descriptron_tour_v1_done';
+  var $id = function(id){ return document.getElementById(id); };
+
+  // ── styles ──────────────────────────────────────────────────────────
+  var css = [
+    '.dtour-backdrop{position:fixed;inset:0;z-index:2000;display:none}',
+    '.dtour-backdrop.show{display:block}',
+    '.dtour-spot{position:absolute;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.62);transition:all .22s ease;pointer-events:none}',
+    '.dtour-ring{position:absolute;border:2px solid var(--gbif-green);border-radius:8px;pointer-events:none;transition:all .22s ease}',
+    '.dtour-card{position:absolute;z-index:2001;background:#fff;color:#222;width:300px;max-width:88vw;border-radius:10px;padding:16px;box-shadow:0 10px 40px rgba(0,0,0,.35);font-family:"Roboto",sans-serif}',
+    '.dtour-card h4{margin:0 0 6px;font-size:14px;color:var(--gbif-green-dark)}',
+    '.dtour-card p{margin:0 0 12px;font-size:12.5px;line-height:1.5;color:#444}',
+    '.dtour-row{display:flex;align-items:center;justify-content:space-between;gap:8px}',
+    '.dtour-step{font-size:11px;color:#999}',
+    '.dtour-btns{display:flex;gap:6px}',
+    '.dtour-btn{padding:6px 12px;border-radius:6px;font-size:12px;font-family:inherit;cursor:pointer;border:1px solid var(--border);background:#fff;color:#555}',
+    '.dtour-btn.primary{background:var(--gbif-green);border-color:var(--gbif-green);color:#fff;font-weight:600}',
+    '.dtour-skip{background:none;border:none;color:#999;font-size:11px;cursor:pointer;text-decoration:underline}',
+    '.dtour-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2002;display:none;align-items:center;justify-content:center}',
+    '.dtour-modal-bg.show{display:flex}',
+    '.dtour-modal{background:#fff;color:#222;width:430px;max-width:90vw;border-radius:14px;padding:26px;box-shadow:0 12px 48px rgba(0,0,0,.4);text-align:center;font-family:"Roboto",sans-serif}',
+    '.dtour-modal h3{margin:0 0 8px;font-size:19px;color:var(--gbif-green-dark)}',
+    '.dtour-modal p{margin:0 0 18px;font-size:13px;line-height:1.6;color:#555}',
+    '.dtour-modal .dtour-btns{justify-content:center}',
+    '.dtour-help-btn{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:6px;padding:5px 9px;font-size:11px;cursor:pointer;font-family:inherit;white-space:nowrap}',
+    '.dtour-help-btn:hover{background:rgba(255,255,255,.32)}'
+  ].join('');
+  var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+
+  // ── worked-example steps ────────────────────────────────────────────
+  // `sel`       : one or more CSS selectors; the spotlight is the UNION of
+  //               every match, so a step can enclose several controls.
+  // `selMobile` : alternative target(s) below 900px, where the desktop
+  //               side panels are hidden and replaced by compact bars.
+  // `panel`     : which mobile panel must be opened first ('tools' opens the
+  //               left panel, 'regions' the right one) — without this the
+  //               target is display:none on a phone and the step is skipped.
+  // `needsKids` : only show the step if the target actually has content.
+  var isMobile = function(){ return window.matchMedia('(max-width:900px)').matches; };
+
+  var steps = [
+    {sel:['.search-bar .search-row'],
+     title:'Search GBIF',
+     body:'Search by species, genus, family, common name, occurrence ID, institution or collection code — and optionally add a second filter. You can also paste an image URL or upload your own photo.'},
+
+    {sel:['#results-container'], needsKids:true,
+     title:'Pick a specimen',
+     body:'Matching GBIF specimens appear here with their names, localities and institution codes. Click any thumbnail to open the full-resolution image on the canvas.'},
+
+    {sel:['#template-select'], panel:'tools',
+     title:'Template &amp; view',
+     body:'The anatomical template is auto-detected from the specimen’s taxonomy. Choose the view you are looking at (e.g. head full-face, habitus lateral).'},
+
+    // On a phone these two controls are reached through the same left panel
+    // that the previous step opens. We deliberately do NOT target the compact
+    // #mobile-toolbar / #mob-segment-btn here: the open left panel is
+    // position:absolute;inset:0 and covers that strip, so those elements still
+    // report valid coordinates while being completely invisible — and the
+    // spotlight would land on whatever panel content sits at those coordinates.
+    {sel:['#tools-container'], panel:'tools',
+     title:'Choose a tool',
+     body:'Box, + / − points, brush, eraser, keypoint or line. Use a box or a point to tell the AI which structure you mean.'},
+
+    {sel:['#segment-btn'], panel:'tools',
+     title:'Highlight &amp; segment',
+     body:'Draw a box or drop a point to <b>highlight a region</b>, then press Segment. The SAM2 model traces a clean outline for you in about a second.'},
+
+    {sel:['#panel-content'], panel:'regions',
+     title:'Add traits',
+     body:'Each region carries morphological attributes drawn from controlled vocabularies linked to formal ontologies (UBERON, HAO, PO…). Record what you observe.'},
+
+    {sel:['#tab-export'], panel:'regions',
+     title:'Export or publish',
+     body:'Export to Darwin Core, COCO, a traits CSV, or a JSON-LD knowledge graph — or publish straight to Zenodo as a citable dataset with a DOI.'},
+
+    {sel:['#login-btn'],
+     title:'(Optional) sign in',
+     body:'Sign in with GBIF or iNaturalist to attach your identity to your annotations. Signing in is optional — everything works without an account. That’s it, you’re ready to annotate!'}
+  ];
+
+  // ── tour DOM ────────────────────────────────────────────────────────
+  var bg   = document.createElement('div'); bg.className   = 'dtour-backdrop';
+  var spot = document.createElement('div'); spot.className = 'dtour-spot';
+  var ring = document.createElement('div'); ring.className = 'dtour-ring';
+  var card = document.createElement('div'); card.className = 'dtour-card';
+  bg.appendChild(spot); bg.appendChild(ring); bg.appendChild(card);
+  document.body.appendChild(bg);
+
+  var idx = 0, active = false, plan = [], busy = false, savedMobTab = null, settleTimer = null;
+
+  // Resolve a step's targets for the current viewport.
+  function selectorsFor(s){
+    return (isMobile() && s.selMobile) ? s.selMobile : s.sel;
+  }
+  function elementsFor(s){
+    var out = [];
+    selectorsFor(s).forEach(function(q){
+      var list;
+      try{ list = document.querySelectorAll(q); }catch(e){ return; }
+      for(var i=0;i<list.length;i++) out.push(list[i]);
+    });
+    return out;
+  }
+
+  // On a phone the side panels are display:none until their nav tab is
+  // chosen, so open the panel this step lives in before measuring it.
+  function openPanel(which){
+    if(!which || !isMobile()) return;
+    var tab = document.querySelector('.mobile-nav .mob-tab[data-mob="' + which + '"]');
+    if(tab && !tab.classList.contains('active')) tab.click();
+  }
+
+  // Union of every visible target rect — lets one step enclose several controls.
+  function unionRect(els){
+    var box = null;
+    els.forEach(function(el){
+      if(!el || !el.getClientRects().length) return;
+      var r = el.getBoundingClientRect();
+      if(!r.width && !r.height) return;
+      box = box ? {
+        left:   Math.min(box.left,   r.left),
+        top:    Math.min(box.top,    r.top),
+        right:  Math.max(box.right,  r.right),
+        bottom: Math.max(box.bottom, r.bottom)
+      } : {left:r.left, top:r.top, right:r.right, bottom:r.bottom};
+    });
+    if(!box) return null;
+    box.width = box.right - box.left; box.height = box.bottom - box.top;
+    return box;
+  }
+
+  // Decide up front which steps are actually showable, so "Step N of M"
+  // never counts steps the user will never be shown.
+  function buildPlan(){
+    plan = steps.filter(function(s){
+      var els = elementsFor(s);
+      if(!els.length) return false;                       // target not in this build
+      if(s.needsKids) return els.some(function(e){ return e.children.length > 0; });
+      return true;                                        // panel steps: revealed at render
+    });
+  }
+
+  // Bring a target into view by setting scroll offsets DIRECTLY on each
+  // scrollable ancestor. We deliberately do not use scrollIntoView(): the
+  // mobile tool strip is an overflow-x container with -webkit-overflow-
+  // scrolling:touch, where scrollIntoView can scroll asynchronously (with
+  // momentum). Measuring straight afterwards then yields a stale rect and the
+  // spotlight lands somewhere unrelated. Assigning scrollLeft/scrollTop is
+  // synchronous and behaves identically on every platform.
+  function bringIntoView(el){
+    var node = el.parentElement;
+    while(node && node !== document.body && node !== document.documentElement){
+      var canX = node.scrollWidth  > node.clientWidth  + 1,
+          canY = node.scrollHeight > node.clientHeight + 1;
+      if(canX || canY){
+        // If the target is the container's last child (the ⚡ Segment button at
+        // the end of the mobile tool strip), just pin the container to its far
+        // end. That is exact by construction and needs no measurement.
+        if(canX && el.parentElement === node && !el.nextElementSibling){
+          node.scrollLeft = node.scrollWidth;
+        }else if(canX){
+          var er1 = el.getBoundingClientRect(), nr1 = node.getBoundingClientRect();
+          node.scrollLeft += (er1.left + er1.width/2) - (nr1.left + nr1.width/2);
+        }
+        if(canY){
+          var er2 = el.getBoundingClientRect(), nr2 = node.getBoundingClientRect();
+          node.scrollTop += (er2.top + er2.height/2) - (nr2.top + nr2.height/2);
+        }
+      }
+      node = node.parentElement;
+    }
+  }
+
+  function fullyVisible(r){
+    return r && r.left >= -2 && r.top >= -2 &&
+           r.right <= window.innerWidth + 2 && r.bottom <= window.innerHeight + 2;
+  }
+
+  // Is `el` the thing the user would actually touch at its own centre? An
+  // element covered by an overlay (e.g. the mobile left panel, which is
+  // absolutely positioned over the whole viewport) still reports a perfectly
+  // good rect, so a rect alone is not proof that it can be seen. Hit-testing
+  // the centre point catches that case. The tour backdrop is pointer-events:
+  // none, so it never interferes with the test.
+  function inTourUI(node){
+    while(node){
+      var c = node.className;
+      if(c && typeof c === 'string' && /(^|\s)dtour-/.test(c)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+  function occluded(el){
+    var r = el.getBoundingClientRect();
+    if(!r.width || !r.height) return true;
+    var cx = Math.min(Math.max(r.left + r.width/2, 1), window.innerWidth  - 1),
+        cy = Math.min(Math.max(r.top  + r.height/2, 1), window.innerHeight - 1);
+    // The tour's own backdrop covers the whole viewport, so it would always be
+    // the hit target. Disable pointer events on our chrome for the duration of
+    // the test so we see what the user would actually be touching underneath.
+    var hit, pbg = bg.style.pointerEvents, pwb = wb ? wb.style.pointerEvents : '';
+    bg.style.pointerEvents = 'none';
+    if(wb) wb.style.pointerEvents = 'none';
+    try{ hit = document.elementFromPoint(cx, cy); }
+    catch(e){ hit = null; }
+    finally{
+      bg.style.pointerEvents = pbg;
+      if(wb) wb.style.pointerEvents = pwb;
+    }
+    if(!hit) return true;
+    if(inTourUI(hit)) return false;   // belt and braces
+    return !(hit === el || el.contains(hit) || hit.contains(el));
+  }
+
+  // Paint only — never scrolls, so it is safe to call from scroll/resize.
+  function draw(){
+    if(!active || idx >= plan.length) return;
+    var s = plan[idx], els = elementsFor(s), r = unionRect(els);
+    if(!r) return;
+    var pad = 6;
+    spot.style.left = (r.left - pad) + 'px'; spot.style.top = (r.top - pad) + 'px';
+    spot.style.width = (r.width + pad*2) + 'px'; spot.style.height = (r.height + pad*2) + 'px';
+    ring.style.left = spot.style.left; ring.style.top = spot.style.top;
+    ring.style.width = spot.style.width; ring.style.height = spot.style.height;
+
+    var last = (idx === plan.length - 1);
+    card.innerHTML =
+      '<h4>' + (idx+1) + ' · ' + s.title + '</h4><p>' + s.body + '</p>' +
+      '<div class="dtour-row"><span class="dtour-step">Step ' + (idx+1) + ' of ' + plan.length + '</span>' +
+      '<div class="dtour-btns">' + (idx>0 ? '<button class="dtour-btn" data-act="back">Back</button>' : '') +
+      '<button class="dtour-btn primary" data-act="next">' + (last ? 'Done' : 'Next') + '</button></div></div>' +
+      '<div style="margin-top:8px;text-align:right"><button class="dtour-skip" data-act="skip">Skip tour</button></div>';
+
+    // Place the card below the target if it fits, else above, else beside it,
+    // and always keep it fully on screen.
+    card.style.left = '0px'; card.style.top = '0px';
+    var ch = card.offsetHeight, cw = card.offsetWidth || 300, gap = 12, top, left;
+    if(r.bottom + gap + ch < window.innerHeight - 8)      top = r.bottom + gap;
+    else if(r.top - gap - ch > 8)                         top = r.top - gap - ch;
+    else                                                  top = Math.max(8, (window.innerHeight - ch) / 2);
+    left = Math.min(Math.max(8, r.left), window.innerWidth - cw - 8);
+    card.style.top  = Math.round(top)  + 'px';
+    card.style.left = Math.round(left) + 'px';
+  }
+
+  // Advance to a step: reveal its target, then paint. The delayed re-paint is
+  // a safety net for platforms where a container scroll settles a frame or two
+  // late (iOS momentum scrolling) — without it the spotlight can be left at
+  // the target's pre-scroll position.
+  function render(){
+    if(idx >= plan.length) return finish();
+    var s = plan[idx];
+
+    busy = true;                               // don't let our own scrolling re-enter
+    openPanel(s.panel);
+    var els = elementsFor(s);
+    if(els[0]){ try{ bringIntoView(els[0]); }catch(e){} }
+    busy = false;
+
+    // Drop a step whose target cannot be measured, or which is sitting behind
+    // an overlay — spotlighting an invisible element points the user at empty
+    // space (or, worse, at unrelated content that happens to be on top of it).
+    if(!unionRect(els) || (els.length === 1 && occluded(els[0]))){
+      plan.splice(idx, 1);
+      return plan.length ? render() : finish();
+    }
+
+    draw();
+    if(settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(function(){
+      if(!active) return;
+      var e0 = elementsFor(plan[idx])[0];
+      if(e0){ try{ bringIntoView(e0); }catch(e){} }
+      draw();
+    }, 280);
+  }
+
+  card.addEventListener('click', function(e){
+    var act = e.target.getAttribute('data-act');
+    if(!act) return;
+    if(act === 'next'){ if(idx >= plan.length-1) finishDone(); else { idx++; render(); } }
+    else if(act === 'back'){ if(idx > 0){ idx--; render(); } }
+    else if(act === 'skip'){ finish(); }
+  });
+
+  function finish(){
+    active = false; bg.classList.remove('show');
+    if(settleTimer){ clearTimeout(settleTimer); settleTimer = null; }
+    // leave the user where they started, not on whatever panel the tour opened
+    if(savedMobTab && isMobile()){
+      try{ if(!savedMobTab.classList.contains('active')) savedMobTab.click(); }catch(e){}
+    }
+    savedMobTab = null;
+    try{ localStorage.setItem(SEEN_KEY,'1'); }catch(e){}
+  }
+  function finishDone(){ finish(); if(typeof showToast === 'function') showToast('Tour complete — happy annotating!'); }
+
+  // Re-paint only. Calling render() here would re-scroll on every scroll event
+  // and fight the user (and could oscillate inside a momentum-scrolling strip).
+  function reposition(){ if(active && !busy) draw(); }
+  window.addEventListener('resize', reposition);
+  window.addEventListener('scroll', reposition, true);
+
+  function start(loadExample){
+    try{ localStorage.setItem(SEEN_KEY,'1'); }catch(e){}
+    if(loadExample){
+      try{
+        var sm = $id('search-mode'), si = $id('search-input');
+        if(sm && si && typeof searchGBIF === 'function'){ sm.value = 'species'; si.value = 'Tetramorium caespitum'; searchGBIF(); }
+      }catch(e){}
+    }
+    savedMobTab = document.querySelector('.mobile-nav .mob-tab.active');
+    idx = 0; active = true; bg.classList.add('show');
+    // let example results arrive before we decide which steps are showable
+    setTimeout(function(){ buildPlan(); render(); }, loadExample ? 700 : 0);
+  }
+
+  // ── welcome / first-run popup ───────────────────────────────────────
+  var wb = document.createElement('div'); wb.className = 'dtour-modal-bg';
+  wb.innerHTML =
+    '<div class="dtour-modal"><h3>👋 Welcome to the Descriptron‑GBIF Annotator</h3>' +
+    '<p>New here? Take a quick guided tour with a worked example — we’ll load a sample specimen and show you how to highlight a region, run AI segmentation, record traits, and export your data. About a minute.</p>' +
+    '<div class="dtour-btns"><button class="dtour-btn" data-act="wskip">Skip</button>' +
+    '<button class="dtour-btn primary" data-act="wstart">Start tour</button></div></div>';
+  document.body.appendChild(wb);
+  wb.addEventListener('click', function(e){
+    var a = e.target.getAttribute('data-act');
+    if(a === 'wstart'){ wb.classList.remove('show'); start(true); }
+    else if(a === 'wskip'){ wb.classList.remove('show'); try{ localStorage.setItem(SEEN_KEY,'1'); }catch(e){} }
+  });
+
+  // ── header replay button + first-run trigger ────────────────────────
+  function init(){
+    var hr = document.querySelector('.header-right');
+    if(hr){
+      var b = document.createElement('button');
+      b.className = 'dtour-help-btn'; b.type = 'button'; b.title = 'Take the guided tour';
+      b.textContent = '❓ Tour';
+      b.addEventListener('click', function(){ start(false); });
+      hr.insertBefore(b, hr.firstChild);
+    }
+    var seen; try{ seen = localStorage.getItem(SEEN_KEY); }catch(e){}
+    if(!seen) setTimeout(function(){ wb.classList.add('show'); }, 900);
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
 </body>
 </html>
 

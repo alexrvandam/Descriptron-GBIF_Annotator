@@ -4,10 +4,22 @@ title: "Descriptron-GBIF Annotator"
 type: software
 authors:
   - family-names: "Van Dam"
-    given-names: "Alex"
+    given-names: "Alex R."
     orcid: "https://orcid.org/0000-0002-1966-0338"
+  - family-names: "Hita Garcia"
+    given-names: "Francisco"
+    orcid: "https://orcid.org/0000-0003-4709-3083"
 repository-code: "https://github.com/alexrvandam/Descriptron-GBIF_Annotator"
 url: "https://www.descriptrongbifannotator.org"
 license: "Apache-2.0"
-version: "1.0.1"
-doi: "10.5281/zenodo.18888578"
+version: "1.0.6"
+date-released: "2026-07-30"
+doi: "10.5281/zenodo.18888577"
+keywords:
+  - biodiversity informatics
+  - citizen science
+  - morphological annotation
+  - GBIF
+  - ontologies
+  - SAM2
+  - FAIR data

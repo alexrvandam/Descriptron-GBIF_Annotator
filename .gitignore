@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# SECRETS — never commit these. The deployment SSH key and any credentials
+# live alongside the static assets on the maintainer's machine; this file
+# exists so that `git add static/` can never publish them.
+# ---------------------------------------------------------------------------
+hetzner-*
+static/hetzner-*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.env
+.env.*
+*secret*
+*credentials*
+*token*
+
+# Runtime / telemetry — not version controlled
+data/
+*.db
+usage.db
+static/uploads/
+
+# Model weights and large build artefacts (fetched at build time)
+checkpoints/
+*.pt
+*.pth
+sam2.1_hiera_tiny_decoder.onnx
+
+# Editor / OS noise
+*~
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
