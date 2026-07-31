@@ -64,18 +64,8 @@ The frontend runs in the browser and provides:
 
 ## Quickstart (UI only)
 
-You can run the frontend without Docker, but some browser features (fetch/CORS) may be limited if you open the file directly.
 
-### Option 1: Serve locally with Python
-```bash
-python3 -m http.server 8000
-
-```
-
-python3 -m http.server 8000
-<img width="998" height="714" alt="Screenshot from 2026-03-07 13-43-33" src="https://github.com/user-attachments/assets/4fae4b3f-c818-43c6-996c-c4a6a5a8a76a" />
-
-[Checkout this video on YouTube about Descriptron-GBIF Annotator](https://www.youtube.com/watch?v=D9C9fcGsaA0&t=5s)
+[Checkout this video on YouTube about Descriptron-GBIF Annotator](https://youtu.be/D9C9fcGsaA0)
 
 if you use the website or github or find it useful please cite it,
 
