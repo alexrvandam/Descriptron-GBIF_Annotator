@@ -65,7 +65,7 @@ The frontend runs in the browser and provides:
 ## Quickstart (UI only)
 
 
-[Checkout this video on YouTube about Descriptron-GBIF Annotator](https://youtu.be/D9C9fcGsaA0)
+[Checkout this video on YouTube about Descriptron-GBIF Annotator](https://github.com/alexrvandam/Descriptron-GBIF_Annotator/blob/main/video-thumbnail_my_crop.jpg)(https://youtu.be/D9C9fcGsaA0)
 
 if you use the website or github or find it useful please cite it,
 
